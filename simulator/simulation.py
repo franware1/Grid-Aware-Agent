@@ -38,7 +38,7 @@ class SimulationEnvironment:
     Main simulation environment: orchestrates grid, power flow, and agent.
     """
     
-    def __init__(self, grid_name: str = "My Grid"):
+    def __init__(self, grid_name: str = "Pepco DC — Washington DC"):
         """Initialize the simulation environment."""
         self.grid_name = grid_name
         self.grid: Optional[GridNetwork] = None
@@ -336,7 +336,7 @@ class SimulationEnvironment:
         
         # Agent step (optional)
         if apply_agent and self.agent is not None:
-            flex_loads = {'DC_Tyson': self.flex_load}  # Hardcoded for now
+            flex_loads = {'DC_NoMa': self.flex_load}
             agent_result = self.agent.step(
                 flex_loads=flex_loads,
                 current_load_mw=state['total_load_mw'],
@@ -430,7 +430,7 @@ def example_usage():
     print("="*70)
     
     # Create environment
-    env = SimulationEnvironment(grid_name="Test Grid")
+    env = SimulationEnvironment()
     
     # Build grid (uses placeholder 3-bus grid)
     env.build_grid()
