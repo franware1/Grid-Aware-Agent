@@ -84,7 +84,7 @@ with tab_sim:
     st.subheader("pandapower grid simulation — DOM zone spike replay")
     st.caption(
         "Each spike interval from real GridStatus data is injected as a LOAD_SPIKE "
-        "event on the DC_Tyson flexible load. The agent responds each step."
+        "event on the DC_NoMa flexible load. The agent responds each step."
     )
 
     if not SPIKES_PATH.exists():

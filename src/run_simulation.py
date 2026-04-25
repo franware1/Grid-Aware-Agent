@@ -4,6 +4,7 @@ Integration bridge: real GridStatus spike data → pandapower simulation.
 Loads data/spikes.csv (produced by baseline.py), converts each flagged
 interval into a LOAD_SPIKE event scaled to the simulator's 3-bus grid,
 runs the EventScheduler + power flow, and prints per-step agent actions.
+Targets the DC_NoMa flexible load on Francisco's Pepco DC grid model.
 
 Usage:
     python src/run_simulation.py [--steps N] [--top-spikes]
@@ -25,9 +26,9 @@ sys.path.insert(0, str(ROOT))
 from simulator.simulation import SimulationEnvironment
 from simulator.events import EventScheduler, GridEvent, EventType
 
-# The simulator's DC_Tyson FlexibleLoad has baseline_mw=100.
+# The simulator's DC_NoMa FlexibleLoad has baseline_mw=110.
 # DOM zone baseline is ~13,000 MW. We scale spike deltas proportionally.
-SIMULATOR_DC_BASELINE_MW = 100.0
+SIMULATOR_DC_BASELINE_MW = 110.0
 DOM_ZONE_BASELINE_MW     = 13_000.0
 SCALE = SIMULATOR_DC_BASELINE_MW / DOM_ZONE_BASELINE_MW
 
@@ -51,7 +52,7 @@ def run(steps: int = None, top_spikes: bool = False) -> list:
     spikes = load_spikes(top_spikes=top_spikes, steps=steps)
     print(f"Loaded {len(spikes)} spike intervals from data/spikes.csv")
 
-    env = SimulationEnvironment(grid_name="DOM-NorthernVA")
+    env = SimulationEnvironment(grid_name="Pepco DC — Washington DC")
     env.build_grid()
     env.initialize()
     scheduler = EventScheduler(env.grid)
@@ -68,7 +69,7 @@ def run(steps: int = None, top_spikes: bool = False) -> list:
         event = GridEvent(
             name=f"spike_{i}",
             event_type=EventType.LOAD_SPIKE,
-            target="DC_Tyson",
+            target="DC_NoMa",
             scheduled_at=float(i),
             duration_steps=1,
             params={"delta_mw": scaled_mw},
