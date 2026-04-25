@@ -54,7 +54,7 @@ class SimulationEnvironment:
     
     def build_grid(self):
         """
-        Build the Pepco Washington DC grid.
+        Build grid uing .
 
         Topology (based on official Pepco system documentation):
           - 7  transmission substations at 115 kV  (PJM interconnect gateways)
