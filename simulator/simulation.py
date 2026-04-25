@@ -26,9 +26,9 @@ Example Usage:
 """
 
 from typing import Dict, List, Optional, Tuple
-from grid_network import GridNetwork
-from power_flow import PowerFlowEngine
-from agent import GridOptimizationAgent
+from simulator.network import GridNetwork
+from simulator.power_flow import PowerFlowEngine
+from simulator.agent import GridOptimizationAgent
 import json
 
 
@@ -54,7 +54,7 @@ class SimulationEnvironment:
         
         This is a placeholder that creates a minimal 3-bus test case.
         """
-        from grid_network import (
+        from simulator.network import (
             BusSpec, LineSpec, GeneratorSpec, LoadSpec,
             FlexibleLoadSpec, StaticGeneratorSpec
         )
@@ -189,7 +189,7 @@ class SimulationEnvironment:
                 flex_loads=flex_loads,
                 current_load_mw=state['total_load_mw'],
                 current_hour=self.current_time_step % 24,
-                current_reserve_mw=state['total_gen_mw'] - state['total_load_mw'],
+                current_reserve_mw=state['total_gen_mw'] + state['total_sgen_mw'] - state['total_load_mw'],
             )
             step_result['agent_result'] = agent_result
         

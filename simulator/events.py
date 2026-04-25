@@ -13,12 +13,15 @@ Usage:
     scheduler.tick(timestep=10.0)
 """
 
+from __future__ import annotations
+
 import random
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Optional, Any
+from typing import TYPE_CHECKING, Dict, List, Optional, Any
 
-from simulator.network import GridNetwork
+if TYPE_CHECKING:
+    from simulator.network import GridNetwork
 
 
 class EventType(str, Enum):

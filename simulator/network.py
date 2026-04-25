@@ -3,16 +3,13 @@ Grid Network Definition
 ========================
 Core simulation objects: buses, lines, generators, loads, flexible loads, transformers.
 This module defines the static topology and dynamic state of the electric grid.
- 
+
 Usage:
-    from grid_network import GridNetwork
+    from simulator.network import GridNetwork
     grid = GridNetwork()
-    grid.create_base_topology()
-    grid.add_scenario("stress_test")
 """
- 
-import pandas as pd
-import numpy as np
+
+import math
 import pandapower as pp
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -133,22 +130,20 @@ class GridNetwork:
         from_idx = self.net.bus[self.net.bus['name'] == spec.from_bus].index[0]
         to_idx = self.net.bus[self.net.bus['name'] == spec.to_bus].index[0]
         
-        # Calculate impedance from per-km parameters
-        r_ohm = spec.r_ohm_per_km * spec.length_km
-        x_ohm = spec.x_ohm_per_km * spec.length_km
-        c_nf = spec.c_nf_per_km * spec.length_km
-        
-        line_idx = pp.create_line(
+        # sn_mva → max_i_ka using the from-bus nominal voltage
+        vn_kv = self.net.bus.loc[from_idx, "vn_kv"]
+        max_i_ka = spec.sn_mva / (math.sqrt(3) * vn_kv)
+
+        line_idx = pp.create_line_from_parameters(
             self.net,
             from_bus=from_idx,
             to_bus=to_idx,
             length_km=spec.length_km,
-            std_type=None,
             r_ohm_per_km=spec.r_ohm_per_km,
             x_ohm_per_km=spec.x_ohm_per_km,
             c_nf_per_km=spec.c_nf_per_km,
-            sn_mva=spec.sn_mva,
-            name=spec.name
+            max_i_ka=max_i_ka,
+            name=spec.name,
         )
         self.line_specs[spec.name] = spec
         return line_idx
@@ -284,10 +279,11 @@ class GridNetwork:
         violations['voltage_min'] = min_voltage < self.constraints['voltage_min_pu']
         violations['voltage_max'] = max_voltage > self.constraints['voltage_max_pu']
         
-        # Check reserve margin
-        total_gen = self.net.res_gen['p_mw'].sum()
-        total_load = self.net.res_load['p_mw'].sum() + self.net.res_sgen['p_mw'].sum()
-        reserve = total_gen - total_load
+        # Check reserve margin: generation + renewables minus demand
+        total_gen  = self.net.res_gen['p_mw'].sum()
+        total_sgen = self.net.res_sgen['p_mw'].sum() if not self.net.sgen.empty else 0.0
+        total_load = self.net.res_load['p_mw'].sum()
+        reserve = total_gen + total_sgen - total_load
         violations['reserve_margin'] = reserve < self.constraints['reserve_margin_mw']
         
         return violations
