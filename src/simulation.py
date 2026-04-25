@@ -28,8 +28,8 @@ Example Usage:
 from typing import Dict, List, Optional, Tuple
 import json
 import pandapower as pp
-from network import GridNetwork
-from power_flow import PowerFlowEngine
+from simulator.network import GridNetwork
+from simulator.power_flow import PowerFlowEngine
 from agent import GridOptimizationAgent
 
 
