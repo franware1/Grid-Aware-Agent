@@ -12,9 +12,9 @@ Usage:
     report = engine.generate_report()
 """
 
+import math
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
-import pandas as pd
 import pandapower as pp
 
 
@@ -147,7 +147,7 @@ class PowerFlowEngine:
         else:
             total_sgen = 0.0
         
-        reserve = total_gen - total_load - total_sgen
+        reserve = total_gen + total_sgen - total_load
         min_reserve = self.grid.constraints['reserve_margin_mw']
         
         violations_dict['reserve_margin'] = reserve < min_reserve
@@ -195,13 +195,14 @@ class PowerFlowEngine:
         from_name = self.net.bus.loc[from_bus, 'name']
         to_name = self.net.bus.loc[to_bus, 'name']
         
+        s_from_mva = math.sqrt(line_result['p_from_mw']**2 + line_result['q_from_mvar']**2) / 1000
+        s_to_mva   = math.sqrt(line_result['p_to_mw']**2   + line_result['q_to_mvar']**2)   / 1000
         return {
             'name': line_name,
             'from_bus': from_name,
             'to_bus': to_name,
-            'sn_mva': self.net.line.loc[line_idx, 'sn_mva'],
-            's_from_mva': line_result['s_from_mva'],
-            's_to_mva': line_result['s_to_mva'],
+            's_from_mva': s_from_mva,
+            's_to_mva': s_to_mva,
             'i_from_ka': line_result['i_from_ka'],
             'i_to_ka': line_result['i_to_ka'],
             'loading_percent': line_result['loading_percent'],
@@ -260,7 +261,7 @@ class PowerFlowEngine:
         total_gen = self.net.res_gen['p_mw'].sum() if not self.net.gen.empty else 0.0
         total_load = self.net.res_load['p_mw'].sum() if not self.net.load.empty else 0.0
         total_sgen = self.net.res_sgen['p_mw'].sum() if not self.net.sgen.empty else 0.0
-        reserve = total_gen - total_load - total_sgen
+        reserve = total_gen + total_sgen - total_load
         
         summary = {
             'status': 'converged',
