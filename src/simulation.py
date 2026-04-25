@@ -25,6 +25,10 @@ Example Usage:
     results = env.run_scenario(steps=24)
 """
 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from typing import Dict, List, Optional, Tuple
 import json
 import pandapower as pp
@@ -144,7 +148,7 @@ class SimulationEnvironment:
         for hv, lv, sn_mva in [
             # Benning Road
             ("Benning Road T", "NoMa",               50), ("Benning Road T", "H Street NE",   40),
-            ("Benning Road T", "Union Station",       60), ("Benning Road T", "Brookland",      30),x
+            ("Benning Road T", "Union Station",       60), ("Benning Road T", "Brookland",      30),
             ("Benning Road T", "Catholic Univ",       30), ("Benning Road T", "Trinidad",       30),
             ("Benning Road T", "Fort Lincoln",        30), ("Benning Road T", "Gallaudet",      25),
             # East Capitol
