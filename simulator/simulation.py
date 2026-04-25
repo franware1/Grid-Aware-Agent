@@ -26,9 +26,7 @@ Example Usage:
 """
 
 from typing import Dict, List, Optional, Tuple
-import json
-import pandapower as pp
-from grid_network import GridNetwork
+from network import GridNetwork
 from power_flow import PowerFlowEngine
 from agent import GridOptimizationAgent
 
@@ -62,7 +60,7 @@ class SimulationEnvironment:
           - 6  DER sgens     (70 MW; concentrated in Mount Vernon / Navy Yard zone)
           - 1  flexible load (NoMa data-center hub, 80–140 MW, 25% deferrable)
         """
-        from grid_network import (
+        from network import (
             BusSpec, LineSpec, GeneratorSpec, LoadSpec,
             FlexibleLoadSpec, StaticGeneratorSpec,
         )
