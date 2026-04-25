@@ -26,9 +26,11 @@ Example Usage:
 """
 
 from typing import Dict, List, Optional, Tuple
-from simulator.network import GridNetwork
-from simulator.power_flow import PowerFlowEngine
-from simulator.agent import GridOptimizationAgent
+import json
+import pandapower as pp
+from network import GridNetwork
+from power_flow import PowerFlowEngine
+from agent import GridOptimizationAgent
 
 
 class SimulationEnvironment:
@@ -60,7 +62,7 @@ class SimulationEnvironment:
           - 6  DER sgens     (70 MW; concentrated in Mount Vernon / Navy Yard zone)
           - 1  flexible load (NoMa data-center hub, 80–140 MW, 25% deferrable)
         """
-        from simulator.network import (
+        from network import (
             BusSpec, LineSpec, GeneratorSpec, LoadSpec,
             FlexibleLoadSpec, StaticGeneratorSpec,
         )
@@ -414,6 +416,109 @@ class SimulationEnvironment:
             json.dump(self.scenario_history, f, indent=2)
         print(f"[ENV] Exported scenario history to {filepath}")
 
+    def debug_check(self):
+        """
+        Verify the simulation is healthy without running the agent.
+
+        Checks (in order):
+          1. Grid topology counts match expected DC grid numbers.
+          2. Power flow converges.
+          3. No voltage violations on any bus.
+          4. No transformer overloads.
+          5. Transmission line loading summary.
+          6. Top-5 most loaded buses (by p_mw draw).
+
+        Safe to call after build_grid(); does NOT require initialize().
+        """
+        if self.grid is None:
+            print("[DEBUG] Grid not built — call build_grid() first.")
+            return
+
+        net = self.grid.net
+        sep = "─" * 60
+
+        print(f"\n{sep}")
+        print(f"  DEBUG CHECK — {self.grid.name}")
+        print(sep)
+
+        # ── 1. Topology counts ────────────────────────────────────────────────
+        n_tx   = len(net.bus[net.bus["vn_kv"] == 115.0])
+        n_dist = len(net.bus[net.bus["vn_kv"] == 13.8])
+        print(f"\n[1] Topology")
+        print(f"    Buses        : {len(net.bus):>3}  (tx={n_tx}, dist={n_dist})  expected 58")
+        print(f"    TX lines     : {len(net.line):>3}  expected 10")
+        print(f"    Transformers : {len(net.trafo):>3}  expected 51")
+        print(f"    Generators   : {len(net.gen):>3}  expected 3")
+        print(f"    Static loads : {len(net.load):>3}  expected 51")
+        print(f"    DER (sgen)   : {len(net.sgen):>3}  expected 6  ({net.sgen['p_mw'].sum():.0f} MW)")
+
+        ok = (len(net.bus) == 58 and len(net.line) == 10 and
+              len(net.trafo) == 51 and len(net.gen) == 3 and len(net.load) == 51)
+        print(f"    {'✓ Counts correct' if ok else '✗ Count mismatch — check build_grid()'}")
+
+        # ── 2. Power flow ─────────────────────────────────────────────────────
+        print(f"\n[2] Power Flow")
+        try:
+            import pandapower as pp
+            pp.runpp(net, check_convergence=True, numba=False)
+            print(f"    ✓ Converged")
+        except Exception as exc:
+            print(f"    ✗ FAILED: {exc}")
+            print(sep)
+            return
+
+        # ── 3. Voltage check ──────────────────────────────────────────────────
+        v_min_pu = self.grid.constraints["voltage_min_pu"]
+        v_max_pu = self.grid.constraints["voltage_max_pu"]
+        voltages  = net.res_bus["vm_pu"]
+        low_buses  = net.bus[voltages < v_min_pu]["name"].tolist()
+        high_buses = net.bus[voltages > v_max_pu]["name"].tolist()
+
+        print(f"\n[3] Voltage  (limits: {v_min_pu}–{v_max_pu} p.u.)")
+        print(f"    Range : {voltages.min():.4f} – {voltages.max():.4f} p.u.")
+        if low_buses:
+            print(f"    ✗ Under-voltage buses : {low_buses}")
+        elif high_buses:
+            print(f"    ✗ Over-voltage buses  : {high_buses}")
+        else:
+            print(f"    ✓ All buses within limits")
+
+        # ── 4. Transformer loading ────────────────────────────────────────────
+        print(f"\n[4] Transformer Loading")
+        if net.trafo.empty or net.res_trafo.empty:
+            print(f"    (no transformers)")
+        else:
+            t_loading = net.res_trafo["loading_percent"]
+            overloaded = net.trafo[t_loading > 100]["name"].tolist()
+            print(f"    Max loading : {t_loading.max():.1f}%  (mean {t_loading.mean():.1f}%)")
+            if overloaded:
+                print(f"    ✗ Overloaded transformers : {overloaded}")
+            else:
+                print(f"    ✓ No transformer overloads")
+
+        # ── 5. Transmission line loading ─────────────────────────────────────
+        print(f"\n[5] Transmission Line Loading")
+        if net.line.empty or net.res_line.empty:
+            print(f"    (no lines)")
+        else:
+            l_loading = net.res_line["loading_percent"]
+            print(f"    Max loading : {l_loading.max():.1f}%  (mean {l_loading.mean():.1f}%)")
+            for idx in l_loading.nlargest(3).index:
+                name = net.line.loc[idx, "name"]
+                pct  = net.res_line.loc[idx, "loading_percent"]
+                print(f"    {name:<35} {pct:>6.1f}%")
+
+        # ── 6. Top-5 loaded buses ─────────────────────────────────────────────
+        print(f"\n[6] Top-5 Buses by Load Draw (MW)")
+        bus_p = net.res_bus["p_mw"].abs()
+        for idx in bus_p.nlargest(5).index:
+            bname = net.bus.loc[idx, "name"]
+            p_mw  = net.res_bus.loc[idx, "p_mw"]
+            v_pu  = net.res_bus.loc[idx, "vm_pu"]
+            print(f"    {bname:<25} {p_mw:>8.1f} MW   {v_pu:.4f} p.u.")
+
+        print(f"\n{sep}\n")
+
 
 # ============================================================================
 # EXAMPLE: How to use the SimulationEnvironment
@@ -452,8 +557,6 @@ def example_usage():
 
 
 if __name__ == "__main__":
-    print("[BOILERPLATE] Integration Module Loaded")
-    print("Use SimulationEnvironment to orchestrate grid + power flow + agent.")
-    
-    # Uncomment to run example:
-    # example_usage()
+    env = SimulationEnvironment()
+    env.build_grid()
+    env.debug_check()
