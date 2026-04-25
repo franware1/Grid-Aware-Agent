@@ -30,7 +30,7 @@ import json
 import pandapower as pp
 from simulator.network import GridNetwork
 from simulator.power_flow import PowerFlowEngine
-from agent import GridOptimizationAgent
+from agent.agent import GridOptimizationAgent
 
 
 class SimulationEnvironment:
@@ -62,7 +62,7 @@ class SimulationEnvironment:
           - 6  DER sgens     (70 MW; concentrated in Mount Vernon / Navy Yard zone)
           - 1  flexible load (NoMa data-center hub, 80–140 MW, 25% deferrable)
         """
-        from network import (
+        from simulator.network import (
             BusSpec, LineSpec, GeneratorSpec, LoadSpec,
             FlexibleLoadSpec, StaticGeneratorSpec,
         )
@@ -144,7 +144,7 @@ class SimulationEnvironment:
         for hv, lv, sn_mva in [
             # Benning Road
             ("Benning Road T", "NoMa",               50), ("Benning Road T", "H Street NE",   40),
-            ("Benning Road T", "Union Station",       60), ("Benning Road T", "Brookland",      30),
+            ("Benning Road T", "Union Station",       60), ("Benning Road T", "Brookland",      30),x
             ("Benning Road T", "Catholic Univ",       30), ("Benning Road T", "Trinidad",       30),
             ("Benning Road T", "Fort Lincoln",        30), ("Benning Road T", "Gallaudet",      25),
             # East Capitol
