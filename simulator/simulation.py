@@ -396,7 +396,7 @@ class SimulationEnvironment:
             'peak_load_mw': max(s['grid_state']['total_load_mw'] for s in self.scenario_history),
             'max_line_loading_pct': max(
                 s['pf_report']['summary'].get('max_line_loading_pct', 0.0)
-                for s in self.scenario_history
+                    for s in self.scenario_history
                 if s.get('pf_report')
             ),
             'violations_recorded': sum(
