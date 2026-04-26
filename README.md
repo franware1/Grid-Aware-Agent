@@ -154,4 +154,4 @@ GRIDSTATUS_API_KEY=your_key_here
 
 ## Authors
 
-Francisco Vu and Aayam — Georgetown University
+Francisco Vu, Aayam Mainali, Wenley Jean-Pierre, Malachi Collins
