@@ -78,3 +78,52 @@ class GridOptimizationAgent:
             "violations": violations,
             "actions": actions_taken,
         }
+
+    def propose(
+        self,
+        flex_loads: Dict,
+        current_load_mw: float,
+        current_hour: int,
+        current_reserve_mw: float,
+    ) -> Dict:
+        """Compute what action should be taken without applying it to the grid."""
+        violations = self.pf_engine.check_constraints()
+        reserve_stressed = current_reserve_mw < self.RESERVE_LOW_MW
+        line_overloaded  = violations.get("line_loading", False)
+        voltage_low      = violations.get("voltage_min", False)
+
+        actions = []
+        for name, flex in flex_loads.items():
+            if line_overloaded or voltage_low:
+                actions.append({
+                    "load": name, "action": "curtail", "pct": self.CURTAIL_PCT,
+                    "success": None,
+                    "reason": "line_overload" if line_overloaded else "low_voltage",
+                })
+            elif reserve_stressed:
+                actions.append({
+                    "load": name, "action": "defer",
+                    "mw": flex.baseline_mw * self.DEFER_PCT,
+                    "success": None,
+                    "reason": "low_reserve",
+                })
+            else:
+                actions.append({
+                    "load": name, "action": "restore",
+                    "success": None,
+                    "reason": "nominal",
+                })
+
+        return {"reserve_mw": current_reserve_mw, "violations": violations, "actions": actions}
+
+    def apply_proposed(self, proposal: Dict, flex_loads: Dict) -> None:
+        """Apply actions from a prior propose() call, filling in success flags."""
+        for action in proposal["actions"]:
+            flex = flex_loads[action["load"]]
+            if action["action"] == "curtail":
+                action["success"] = flex.curtail_load(action["pct"])
+            elif action["action"] == "defer":
+                action["success"] = flex.defer_load(action["mw"])
+            else:
+                flex.restore_baseline()
+                action["success"] = True

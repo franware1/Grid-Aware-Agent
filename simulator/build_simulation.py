@@ -35,8 +35,6 @@ with open(_CONFIG_PATH) as _f:
 import pandapower as pp
 from simulator.network import GridNetwork
 from simulator.power_flow import PowerFlowEngine
-from agent.agent import GridOptimizationAgent
-
 # Main simulation environment generated from config
 class SimulationEnvironment:
    
@@ -45,10 +43,12 @@ class SimulationEnvironment:
         self.grid_name = grid_name
         self.grid: Optional[GridNetwork] = None
         self.pf_engine: Optional[PowerFlowEngine] = None
-        self.agent: Optional[GridOptimizationAgent] = None
-        
+
         self.scenario_history: List[Dict] = []
         self.current_time_step = 0
+
+        # Tracks any active injected event; checked by the external agent loop
+        self.active_event: Optional[Dict] = None
     
     # Grid simulation config - every network element can be found in the config 
     def build_grid(self):
@@ -117,31 +117,21 @@ class SimulationEnvironment:
         print(f"      {len(net.load):>3} static loads ({net.load['p_mw'].sum():.0f} MW peak)")
         print(f"      {len(net.sgen):>3} DER units   ({net.sgen['p_mw'].sum():.0f} MW)")
     
+    # Initialize the power flow engine and run the first power flow
     def initialize(self):
-        """Initialize power flow engine and agent after grid is built."""
         if self.grid is None:
             raise RuntimeError("Call build_grid() first")
-        
+
         self.pf_engine = PowerFlowEngine(self.grid)
-        self.agent = GridOptimizationAgent(self.grid, self.pf_engine)
-        
-        # Run initial power flow
+
         success = self.pf_engine.run()
         if not success:
             raise RuntimeError("Initial power flow failed to converge")
-        
+
         print("[ENV] Initialization complete. Initial power flow converged.")
     
-    def step(self, apply_agent: bool = True) -> Dict:
-        """
-        Execute one time step: power flow + optional agent planning.
-        
-        Args:
-            apply_agent: If True, run agent step (forecast, plan, execute).
-        
-        Returns:
-            Dictionary with step results.
-        """
+    def step(self) -> Dict:
+
         if self.grid is None or self.pf_engine is None:
             raise RuntimeError("Call initialize() first")
         
@@ -149,7 +139,6 @@ class SimulationEnvironment:
             'time_step': self.current_time_step,
             'grid_state': None,
             'pf_report': None,
-            'agent_result': None,
         }
         
         # Power flow
@@ -167,17 +156,6 @@ class SimulationEnvironment:
         state = self.grid.get_state_summary()
         step_result['grid_state'] = state
         
-        # Agent step (optional)
-        if apply_agent and self.agent is not None:
-            flex_loads = {'DC_NoMa': self.flex_load}
-            agent_result = self.agent.step(
-                flex_loads=flex_loads,
-                current_load_mw=state['total_load_mw'],
-                current_hour=self.current_time_step % 24,
-                current_reserve_mw=state['total_gen_mw'] + state['total_sgen_mw'] - state['total_load_mw'],
-            )
-            step_result['agent_result'] = agent_result
-        
         step_result['converged'] = True
         
         # Log to history
@@ -186,28 +164,13 @@ class SimulationEnvironment:
         
         return step_result
     
-    def run_scenario(
-        self,
-        steps: int = 24,
-        apply_agent: bool = True,
-        print_reports: bool = False,
-    ) -> List[Dict]:
-        """
-        Run simulation for N time steps.
-        
-        Args:
-            steps: Number of time steps to run
-            apply_agent: Whether to apply agent at each step
-            print_reports: Whether to print detailed reports
-        
-        Returns:
-            List of step results.
-        """
+    # Run the simulation for N time steps, returning the full history
+    def run_scenario(self, steps: int = 24, print_reports: bool = False) -> List[Dict]:
         print(f"\n[ENV] Running scenario for {steps} steps...")
-        
+
         for _ in range(steps):
-            result = self.step(apply_agent=apply_agent)
-            
+            result = self.step()
+
             if not result['converged']:
                 print(f"[SCENARIO] Stopped at step {self.current_time_step} (convergence failure)")
                 break
@@ -218,15 +181,14 @@ class SimulationEnvironment:
         print(f"[ENV] Scenario complete. {self.current_time_step} steps executed.")
         return self.scenario_history
     
+    # Get summary statistics across all steps in the scenario
     def get_scenario_summary(self) -> Dict:
-        """Get summary statistics of the scenario."""
         if not self.scenario_history:
             return {'message': 'No scenario history'}
         
         summary = {
             'total_steps': len(self.scenario_history),
             'converged_steps': sum(1 for s in self.scenario_history if s.get('converged', False)),
-            'agent_steps': sum(1 for s in self.scenario_history if s.get('agent_result') is not None),
             'peak_generation_mw': max(s['grid_state']['total_gen_mw'] for s in self.scenario_history),
             'peak_load_mw': max(s['grid_state']['total_load_mw'] for s in self.scenario_history),
             'max_line_loading_pct': max(
@@ -243,26 +205,51 @@ class SimulationEnvironment:
         
         return summary
     
+    # Export scenario history to a JSON file
     def export_history_json(self, filepath: str):
-        """Export scenario history to JSON file."""
         with open(filepath, 'w') as f:
             json.dump(self.scenario_history, f, indent=2)
         print(f"[ENV] Exported scenario history to {filepath}")
 
+    # Inject a persistent load spike on a named load.
+    # Unlike EventScheduler events this does not auto-expire — it stays on
+    # the grid until resolve_event() is called. run_live.py calls this when
+    # a scheduled problem fires, and calls resolve_event() when it clears.
+    def inject_event(self, target_load: str, extra_mw: float, label: str = "LOAD_SPIKE") -> None:
+        if self.grid is None:
+            raise RuntimeError("Call build_grid() first")
+        net = self.grid.net
+        mask = net.load["name"] == target_load
+        if not mask.any():
+            raise ValueError(f"Load '{target_load}' not found in network")
+        load_idx = net.load[mask].index[0]
+        original_mw = float(net.load.loc[load_idx, "p_mw"])
+        net.load.loc[load_idx, "p_mw"] = original_mw + extra_mw
+        self.active_event = {
+            "label":       label,
+            "target_load": target_load,
+            "load_idx":    load_idx,
+            "original_mw": original_mw,
+            "extra_mw":    extra_mw,
+        }
+        print(f"[EVENT] {label} injected on '{target_load}': "
+              f"{original_mw:.1f} → {original_mw + extra_mw:.1f} MW (+{extra_mw} MW)")
+
+    # Revert the active injected event and clear event state
+    def resolve_event(self) -> None:
+        if self.active_event is None:
+            print("[EVENT] No active event to resolve.")
+            return
+        net = self.grid.net
+        idx = self.active_event["load_idx"]
+        net.load.loc[idx, "p_mw"] = self.active_event["original_mw"]
+        print(f"[EVENT] Resolved '{self.active_event['target_load']}' — "
+              f"load restored to {self.active_event['original_mw']:.1f} MW")
+        self.active_event = None
+
+    # Debug method to ensure that the grid has all of its items
+    # Checks with the .json item list to ensure that all of the items are present
     def def_check(self):
-        """
-        Verify the simulation is healthy without running the agent.
-
-        Checks (in order):
-          1. Grid topology counts match expected DC grid numbers.
-          2. Power flow converges.
-          3. No voltage violations on any bus.
-          4. No transformer overloads.
-          5. Transmission line loading summary.
-          6. Top-5 most loaded buses (by power_mv draw).
-
-        Safe to call after build_grid(); does NOT require initialize().
-        """
         if self.grid is None:
             print("[DEBUG] Grid not built — call build_grid() first.")
             return
@@ -357,10 +344,8 @@ class SimulationEnvironment:
 # EXAMPLE: How to use the SimulationEnvironment
 # ============================================================================
 
+# Example workflow: build grid, run power flow, run agent scenario
 def example_usage():
-    """
-    Example workflow: build grid, run power flow, run agent scenario.
-    """
     print("\n" + "="*70)
     print("EXAMPLE: Grid Simulation Workflow")
     print("="*70)
