@@ -18,8 +18,9 @@ import streamlit as st
 # ── Import path: make `backend` package visible ────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent.parent))  # interface/
 
-from backend.grid_connection import get_connection_status, get_history, get_latest_state
+from backend.grid_connection import get_connection_status, get_history, get_latest_state, OPERATOR_RESP_PATH
 from backend.constants import ACTION_PLAIN, DC_STATE_PLAIN, TX_LINES, BASE_LINE_PCT
+from backend.chat import chat as operator_chat
 
 # ── Logo ───────────────────────────────────────────────────────────────────────
 _LOGO_PATH = Path(__file__).parent / "assets" / "kashimo3.png"
@@ -31,7 +32,7 @@ st.set_page_config(
     page_title="GridAgent // Pepco DC",
     page_icon="⚡",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ── CSS (identical to dashboard.py) ───────────────────────────────────────────
@@ -175,6 +176,11 @@ def _reconstruct_line_pcts(dc_load, mult):
     stress = max(0, dc_load - 110) * 0.38 + (mult - 0.77) * 195
     return [round(b + (stress if i in (6, 8) else stress * 0.3), 1)
             for i, b in enumerate(BASE_LINE_PCT)]
+
+def _send_operator_choice(choice: str):
+    import json
+    OPERATOR_RESP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    OPERATOR_RESP_PATH.write_text(json.dumps({"choice": choice}))
 
 def sbar(val, label, plain):
     col = _rc(val)
@@ -355,37 +361,89 @@ alarm_html += f'<span class="alarm-ts">{now_str}</span></div>'
 st.markdown(alarm_html, unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ACTION PANEL — read-only advisory (operator acts in the terminal)
+# DANGER PANEL — interactive operator action buttons
 # ══════════════════════════════════════════════════════════════════════════════
 if needs_decision:
     plain_label, plain_explain = ACTION_PLAIN.get(b2, ("Review situation", ""))
     conf_col = {"HIGH": "#e74c3c", "MEDIUM": "#f0a030"}.get(conf, "#4ac8f0")
 
+    # Flashing danger header
     st.markdown(f"""
-    <div style="background:rgba(231,76,60,.07);border:1px solid rgba(231,76,60,.35);border-left:4px solid #e74c3c;
-         padding:14px 20px;margin:8px 0 4px;border-radius:2px">
-      <div style="font-family:'Share Tech Mono';font-size:10px;color:#e74c3c;letter-spacing:.15em;margin-bottom:6px">
-        ⚠  OPERATOR ACTION REQUESTED — RESPOND IN THE TERMINAL RUNNING run_live.py
-      </div>
-      <div style="display:flex;gap:24px;align-items:flex-start">
+    <div style="background:rgba(231,76,60,.10);border:2px solid #e74c3c;border-left:6px solid #e74c3c;
+         padding:14px 20px;margin:8px 0 0;border-radius:2px;animation:blink 1.4s infinite">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:24px">
         <div style="flex:2">
-          <div style="font-family:'Rajdhani';font-size:16px;color:#ffa0a0;font-weight:600;margin-bottom:4px">
+          <div style="font-family:'Share Tech Mono';font-size:11px;color:#e74c3c;letter-spacing:.2em;margin-bottom:6px">
+            ⚠  GRID EVENT — OPERATOR RESPONSE REQUIRED
+          </div>
+          <div style="font-family:'Rajdhani';font-size:20px;color:#ff8080;font-weight:700;margin-bottom:4px">
             {ev_name.replace("_", " ").title() if ev_name else "Grid stress detected"}
           </div>
-          <div style="font-family:'Rajdhani';font-size:13px;color:#c8e0c0;margin-top:6px;line-height:1.5">
-            {why}
-          </div>
-          {"<div style='font-family:Share Tech Mono;font-size:9px;color:#4a7a4a;margin-top:8px;letter-spacing:.08em'>OPERATOR RESPONDED: " + op_choice.upper() + "</div>" if op_choice else ""}
+          <div style="font-family:'Rajdhani';font-size:13px;color:#c8e0c0;line-height:1.6">{why}</div>
+          {"<div style='font-family:Share Tech Mono;font-size:9px;color:#2ecc71;margin-top:8px;letter-spacing:.08em'>✓ OPERATOR RESPONDED: " + op_choice.upper() + "</div>" if op_choice else ""}
         </div>
-        <div style="flex:1;background:rgba(231,76,60,.1);border:1px solid rgba(231,76,60,.3);border-radius:2px;padding:10px;text-align:center">
-          <div style="font-family:'Share Tech Mono';font-size:9px;color:#e74c3c;letter-spacing:.12em;margin-bottom:6px">AI RECOMMENDS</div>
-          <div style="font-family:'Share Tech Mono';font-size:15px;color:#ff8080;margin-bottom:4px">{b2}</div>
-          <div style="font-family:'Rajdhani';font-size:13px;color:#ffa080;font-weight:600">{plain_label}</div>
+        <div style="flex:1;background:rgba(231,76,60,.12);border:1px solid rgba(231,76,60,.4);
+             border-radius:2px;padding:12px;text-align:center;min-width:160px">
+          <div style="font-family:'Share Tech Mono';font-size:9px;color:#e74c3c;letter-spacing:.14em;margin-bottom:6px">AI RECOMMENDS</div>
+          <div style="font-family:'Share Tech Mono';font-size:14px;color:#ff8080;margin-bottom:3px">{b2}</div>
+          <div style="font-family:'Rajdhani';font-size:14px;color:#ffb080;font-weight:600">{plain_label}</div>
           <div style="font-family:'Share Tech Mono';font-size:9px;color:{conf_col};margin-top:6px">CONFIDENCE: {conf}</div>
         </div>
       </div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Action buttons — clicking writes the choice to the response file
+    st.markdown('<div style="margin:6px 0 4px;font-family:Share Tech Mono;font-size:9px;color:#e74c3c;letter-spacing:.15em">SELECT RESPONSE ACTION:</div>', unsafe_allow_html=True)
+
+    _btn_style = """
+    <style>
+    div[data-testid="stHorizontalBlock"] .stButton>button{width:100%!important;padding:10px 6px!important;font-size:11px!important;}
+    .btn-recommend .stButton>button{background:rgba(231,76,60,.18)!important;border-color:#e74c3c!important;color:#ff8080!important;}
+    .btn-defer     .stButton>button{background:rgba(240,160,48,.12)!important;border-color:#f0a030!important;color:#ffc060!important;}
+    .btn-curtail   .stButton>button{background:rgba(231,76,60,.12)!important;border-color:#c0392b!important;color:#ff6060!important;}
+    .btn-restore   .stButton>button{background:rgba(46,204,113,.08)!important;border-color:#2ecc71!important;color:#2ecc71!important;}
+    .btn-ack       .stButton>button{background:rgba(74,200,240,.08)!important;border-color:#4ac8f0!important;color:#4ac8f0!important;}
+    </style>
+    """
+    st.markdown(_btn_style, unsafe_allow_html=True)
+
+    ba, bb, bc, bd, be = st.columns(5)
+    with ba:
+        st.markdown('<div class="btn-recommend">', unsafe_allow_html=True)
+        if st.button(f"[1] {b2.replace('_',' ')}\n← AI REC", key="op_1"):
+            _send_operator_choice("1")
+            st.session_state.running = True
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    with bb:
+        st.markdown('<div class="btn-defer">', unsafe_allow_html=True)
+        if st.button("[2] DEFER\nWorkload", key="op_2"):
+            _send_operator_choice("2")
+            st.session_state.running = True
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    with bc:
+        st.markdown('<div class="btn-curtail">', unsafe_allow_html=True)
+        if st.button("[3] CURTAIL\nLoad now", key="op_3"):
+            _send_operator_choice("3")
+            st.session_state.running = True
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    with bd:
+        st.markdown('<div class="btn-restore">', unsafe_allow_html=True)
+        if st.button("[4] RESTORE\nBaseline", key="op_4"):
+            _send_operator_choice("4")
+            st.session_state.running = True
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    with be:
+        st.markdown('<div class="btn-ack">', unsafe_allow_html=True)
+        if st.button("[↵] ACKNOWLEDGE\n& Resolve", key="op_enter"):
+            _send_operator_choice("")
+            st.session_state.running = True
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
 
@@ -727,9 +785,100 @@ with tab_events:
         st.markdown(f'<div class="scada-card"><div class="log-scroll" style="height:420px">{rt_inner}</div></div>', unsafe_allow_html=True)
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SIDEBAR — OPERATOR CHAT (always visible regardless of active tab)
+# ══════════════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown("""
+    <style>
+    [data-testid="stSidebar"]{background:#060e08!important;border-right:1px solid #1a4a22!important;min-width:340px!important;max-width:340px!important;}
+    [data-testid="stSidebar"] .stChatMessage{background:transparent!important;}
+    [data-testid="stSidebar"] [data-testid="stChatMessageContent"]{font-family:'Rajdhani'!important;font-size:13px!important;}
+    [data-testid="stSidebar"] .stChatInputContainer{border-top:1px solid #1a4a22!important;background:#060e08!important;}
+    [data-testid="stSidebar"] .stChatInputContainer textarea{background:#080e10!important;color:#a8c8a0!important;font-family:'Share Tech Mono'!important;font-size:11px!important;border:1px solid #1a4a22!important;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown(
+        '<div style="font-family:Share Tech Mono;font-size:10px;color:#2ecc71;'
+        'letter-spacing:.18em;text-transform:uppercase;padding:10px 0 4px;'
+        'border-bottom:1px solid #1a4a22;margin-bottom:10px">'
+        '⚡ AI OPERATOR ASSISTANT</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="font-family:Rajdhani;font-size:11px;color:#4a8a5a;line-height:1.5;margin-bottom:10px">'
+        'Live grid Q&amp;A — re-reads the latest tick on every turn.</div>',
+        unsafe_allow_html=True,
+    )
+
+    if "chat_messages" not in st.session_state:
+        st.session_state.chat_messages = []
+    if "chat_busy" not in st.session_state:
+        st.session_state.chat_busy = False
+
+    # Quick-fire suggestion buttons
+    suggestions = [
+        "What is the grid doing right now?",
+        "Why was Brain 2's last action recommended?",
+        "What's our biggest risk this hour?",
+        "Explain the active event in plain English.",
+    ]
+    for i, q in enumerate(suggestions):
+        if st.button(q, key=f"chat_sug_{i}", disabled=st.session_state.chat_busy, use_container_width=True):
+            st.session_state.chat_messages.append({"role": "user", "content": q})
+            st.session_state.chat_busy = True
+            st.rerun()
+
+    st.markdown('<div style="height:4px"></div>', unsafe_allow_html=True)
+
+    # Conversation history
+    chat_container = st.container(height=420)
+    with chat_container:
+        if not st.session_state.chat_messages:
+            st.markdown(
+                '<div style="font-family:Share Tech Mono;font-size:10px;color:#2a5a2a;'
+                'padding:40px 0;text-align:center;letter-spacing:.1em">'
+                'ASK A QUESTION ABOVE<br>OR TYPE BELOW</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            for msg in st.session_state.chat_messages:
+                with st.chat_message(msg["role"]):
+                    st.markdown(msg["content"])
+
+        if st.session_state.chat_busy:
+            with st.chat_message("assistant"):
+                with st.spinner("Reading grid state…"):
+                    try:
+                        reply = operator_chat(st.session_state.chat_messages)
+                    except Exception as exc:
+                        reply = f"⚠ Chat error: {exc}"
+                st.markdown(reply)
+            st.session_state.chat_messages.append({"role": "assistant", "content": reply})
+            st.session_state.chat_busy = False
+
+    prompt = st.chat_input("Ask the AI about the grid…", key="sidebar_chat_input")
+    if prompt:
+        st.session_state.chat_messages.append({"role": "user", "content": prompt})
+        st.session_state.chat_busy = True
+        st.rerun()
+
+    st.markdown('<div style="height:6px"></div>', unsafe_allow_html=True)
+    if st.button("CLEAR CONVERSATION", key="chat_clear", use_container_width=True):
+        st.session_state.chat_messages = []
+        st.rerun()
+
+    st.markdown(
+        '<div style="font-family:Share Tech Mono;font-size:8px;color:#1a4a2a;'
+        'padding-top:8px;border-top:1px solid #0a2010;letter-spacing:.08em">'
+        'TIP: HIT ⏸ PAUSE ABOVE IF AUTO-REFRESH INTERRUPTS TYPING.</div>',
+        unsafe_allow_html=True,
+    )
+
+# ══════════════════════════════════════════════════════════════════════════════
 # AUTO-REFRESH — poll until a new tick is written, then rerun
 # ══════════════════════════════════════════════════════════════════════════════
-if st.session_state.running:
+if st.session_state.running and not st.session_state.get("chat_busy", False):
     _deadline = time.time() + 10.0  # fall-through after 10 s to refresh status
     while time.time() < _deadline:
         time.sleep(0.5)
