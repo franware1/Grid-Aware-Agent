@@ -151,14 +151,12 @@ _LOG_COLUMNS = [
 
 
 def _init_log() -> csv.DictWriter:
-    """Open (or create) the CSV log and return a writer positioned at EOF."""
+    """Reset and create the CSV log, returning a writer at the start of a fresh file."""
     LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    write_header = not LOG_PATH.exists() or LOG_PATH.stat().st_size == 0
-    fh = LOG_PATH.open("a", newline="", encoding="utf-8")
+    fh = LOG_PATH.open("w", newline="", encoding="utf-8")
     writer = csv.DictWriter(fh, fieldnames=_LOG_COLUMNS)
-    if write_header:
-        writer.writeheader()
-        fh.flush()
+    writer.writeheader()
+    fh.flush()
     return writer, fh
 
 
