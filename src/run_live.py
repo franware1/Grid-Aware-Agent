@@ -19,10 +19,12 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, str(Path(__file__).parent))         # src/
+sys.path.insert(0, str(Path(__file__).parent.parent))  # project root (for simulator/)
 
 from simulator.brain1 import score as brain1
 from simulator.brain2 import run as brain2
+from simulator.events import EventScheduler, GridEvent, EventType
 from src.simulation import SimulationEnvironment
 
 # ── 24-hour load multiplier profile ───────────────────────────────────────────
@@ -56,6 +58,63 @@ LOAD_PROFILE = [
 ]
 
 
+# ── Demo event schedule ───────────────────────────────────────────────────────
+# Four events spaced across one 24-hour cycle.  Each fires at a specific tick
+# and lasts long enough for the agent to detect and react before clearing.
+DEMO_SCHEDULE = [
+    # Tick 6 (06:00 day 1) — morning demand surge in NE DC
+    GridEvent(
+        name="demo_surge_capitol_hill",
+        event_type=EventType.POWER_SURGE,
+        target="Capitol Hill",
+        scheduled_at=6.0,
+        duration_steps=3,
+        params={"magnitude_mw": 45.0},
+    ),
+    # Tick 18 (18:00 day 1) — transmission line fault at evening peak
+    GridEvent(
+        name="demo_line_fault_benning",
+        event_type=EventType.LINE_TRIP,
+        target="TX_Benning-EastCapitol",
+        scheduled_at=18.0,
+        duration_steps=4,
+        params={},
+    ),
+    # Tick 30 (06:00 day 2) — generator trip during morning ramp
+    GridEvent(
+        name="demo_gen_trip_georgetown",
+        event_type=EventType.GENERATOR_TRIP,
+        target="Georgetown Gen",
+        scheduled_at=30.0,
+        duration_steps=5,
+        params={},
+    ),
+    # Tick 42 (18:00 day 2) — Navy Yard solar derates in evening storm
+    GridEvent(
+        name="demo_der_outage_navy_yard",
+        event_type=EventType.WEATHER_OUTAGE,
+        target="DER Navy Yard",
+        scheduled_at=42.0,
+        duration_steps=4,
+        params={"derate_pct": 0.80},
+    ),
+]
+
+
+def _print_event_banner(ev: GridEvent, status: str) -> None:
+    bar = "!" * 70
+    print(f"\n{bar}")
+    print(f"  [EVENT {status}]  {ev.name}")
+    print(f"  Type    : {ev.event_type.value}")
+    print(f"  Target  : {ev.target}")
+    if ev.params:
+        pairs = "  |  ".join(f"{k}={v}" for k, v in ev.params.items())
+        print(f"  Params  : {pairs}")
+    if status == "FIRED":
+        print(f"  Duration: {ev.duration_steps} ticks")
+    print(f"{bar}\n")
+
+
 def apply_load_profile(env: SimulationEnvironment, hour: int) -> None:
     """Scale all static loads to the current hour's demand multiplier."""
     multiplier = LOAD_PROFILE[hour % 24]
@@ -75,7 +134,7 @@ def apply_load_profile(env: SimulationEnvironment, hour: int) -> None:
 
 
 def print_tick(tick: int, hour: int, state: dict, agent_result: dict,
-               multiplier: float) -> None:
+               multiplier: float, active_events: list = None) -> None:
     """Print a single-line live status for this tick."""
     sep = "─" * 70
 
@@ -105,6 +164,11 @@ def print_tick(tick: int, hour: int, state: dict, agent_result: dict,
     print(f"  Load     : {total_load:>7.1f} MW    Generation : {total_gen:>7.1f} MW")
     print(f"  Reserve  : {reserve:>7.1f} MW    Line max   : {max_line:>6.1f}%")
     print(f"  V min    : {v_min:.4f} p.u.   Agent      : {action_str}{alert}")
+    if active_events:
+        ev_str = "  |  ".join(
+            f"{e.event_type.value}@{e.target}" for e in active_events
+        )
+        print(f"  Active   : {ev_str}")
 
 
 def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
@@ -116,6 +180,11 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
     env = SimulationEnvironment()
     env.build_grid()
     env.initialize()
+
+    scheduler = EventScheduler(env.grid)
+    for ev in DEMO_SCHEDULE:
+        scheduler.schedule(ev)
+    print(f"[LIVE] {len(DEMO_SCHEDULE)} demo events scheduled.\n")
 
     tick = 0
     try:
@@ -129,6 +198,13 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
 
             # Update load levels for this hour
             apply_load_profile(env, hour)
+
+            # Fire / expire scheduled events before the power flow step
+            event_results = scheduler.tick(float(tick))
+            for ev in event_results["applied"]:
+                _print_event_banner(ev, "FIRED")
+            for ev in event_results["expired"]:
+                _print_event_banner(ev, "CLEARED")
 
             # Step: power flow + agent
             result = env.step(apply_agent=True)
@@ -154,6 +230,7 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
                 state=result["grid_state"],
                 agent_result=result.get("agent_result"),
                 multiplier=multiplier,
+                active_events=scheduler.active_events(),
             )
 
             tick += 1
