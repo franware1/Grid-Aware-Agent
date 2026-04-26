@@ -184,7 +184,7 @@ def run(risk: dict, their_action: dict, time_step: int) -> dict:
 
     try:
         response = _client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
