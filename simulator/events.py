@@ -15,6 +15,7 @@ Usage:
 
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass, field
 from enum import Enum
@@ -25,11 +26,16 @@ if TYPE_CHECKING:
 
 
 class EventType(str, Enum):
-    POWER_SURGE      = "power_surge"       # Sudden load spike at a bus
-    WEATHER_OUTAGE   = "weather_outage"    # Generator/line derated by weather
-    LINE_TRIP        = "line_trip"         # Transmission line disconnected
-    GENERATOR_TRIP   = "generator_trip"   # Generator forced offline
-    LOAD_SPIKE       = "load_spike"        # Demand increase at a load
+    POWER_SURGE          = "power_surge"          # Sudden load spike at a bus
+    WEATHER_OUTAGE       = "weather_outage"        # Generator/line derated by weather
+    LINE_TRIP            = "line_trip"             # Transmission line disconnected
+    GENERATOR_TRIP       = "generator_trip"        # Generator forced offline
+    LOAD_SPIKE           = "load_spike"            # Demand increase at a load
+    # ── AI data center events ─────────────────────────────────────────────────
+    AI_TRAINING_SPIKE    = "ai_training_spike"     # Training job starts: random-magnitude step up
+    AI_TRAINING_DROPOUT  = "ai_training_dropout"   # Job ends/crashes: sudden load drop
+    COOLING_CASCADE      = "cooling_cascade"       # Compute spike + delayed cooling load
+    LOAD_OSCILLATION     = "load_oscillation"      # Power-electronics hunting: sinusoidal swing
 
 
 @dataclass
@@ -110,6 +116,7 @@ class EventScheduler:
         that changed state this tick — useful for agent observation.
         """
         applied = self._apply_due(timestep)
+        self._update_active(timestep)   # per-tick mutation (e.g. oscillation, cooling cascade)
         expired = self._expire_finished(timestep)
         return {"applied": applied, "expired": expired}
 
@@ -125,6 +132,19 @@ class EventScheduler:
     # ------------------------------------------------------------------
     # Internal — apply / expire
     # ------------------------------------------------------------------
+
+    def _update_active(self, timestep: float) -> None:
+        update_handlers = {
+            EventType.LOAD_OSCILLATION: self._update_load_oscillation,
+            EventType.COOLING_CASCADE:  self._update_cooling_cascade,
+        }
+        for event in self._active:
+            handler = update_handlers.get(event.event_type)
+            if handler:
+                try:
+                    handler(event, timestep)
+                except Exception as exc:
+                    print(f"[EVENT] Failed to update {event.name}: {exc}")
 
     def _apply_due(self, timestep: float) -> List[GridEvent]:
         due, remaining = [], []
@@ -165,11 +185,15 @@ class EventScheduler:
 
     def _apply(self, event: GridEvent, timestep: float) -> bool:
         handlers = {
-            EventType.POWER_SURGE:    self._apply_power_surge,
-            EventType.WEATHER_OUTAGE: self._apply_weather_outage,
-            EventType.LINE_TRIP:      self._apply_line_trip,
-            EventType.GENERATOR_TRIP: self._apply_generator_trip,
-            EventType.LOAD_SPIKE:     self._apply_load_spike,
+            EventType.POWER_SURGE:         self._apply_power_surge,
+            EventType.WEATHER_OUTAGE:      self._apply_weather_outage,
+            EventType.LINE_TRIP:           self._apply_line_trip,
+            EventType.GENERATOR_TRIP:      self._apply_generator_trip,
+            EventType.LOAD_SPIKE:          self._apply_load_spike,
+            EventType.AI_TRAINING_SPIKE:   self._apply_ai_training_spike,
+            EventType.AI_TRAINING_DROPOUT: self._apply_ai_training_dropout,
+            EventType.COOLING_CASCADE:     self._apply_cooling_cascade,
+            EventType.LOAD_OSCILLATION:    self._apply_load_oscillation,
         }
         handler = handlers.get(event.event_type)
         if handler is None:
@@ -244,6 +268,91 @@ class EventScheduler:
             net.load.loc[load_mask, "p_mw"] *= event.params["scale_factor"]
 
     # ------------------------------------------------------------------
+    # Apply handlers — AI data center events
+    # ------------------------------------------------------------------
+
+    # Training job starts: magnitude drawn randomly so the grid operator has no
+    # advance notice of how large the step will be.
+    def _apply_ai_training_spike(self, event: GridEvent) -> None:
+        net = self.grid.net
+        load_mask = net.load["name"] == event.target
+        if not load_mask.any():
+            raise ValueError(f"Load '{event.target}' not found.")
+        min_mw = event.params.get("min_mw", 30.0)
+        max_mw = event.params.get("max_mw", 120.0)
+        magnitude_mw = random.uniform(min_mw, max_mw)
+        event._snapshot["p_mw"] = net.load.loc[load_mask, "p_mw"].to_dict()
+        event._snapshot["magnitude_mw"] = magnitude_mw
+        net.load.loc[load_mask, "p_mw"] += magnitude_mw
+        print(f"[EVENT] AI training spike: '{event.target}' +{magnitude_mw:.1f} MW "
+              f"(sampled from [{min_mw}, {max_mw}] MW)")
+
+    # Training job ends or crashes: load drops by dropout_pct of current draw.
+    # A sudden large drop can cause over-voltage and frequency excursion.
+    def _apply_ai_training_dropout(self, event: GridEvent) -> None:
+        net = self.grid.net
+        load_mask = net.load["name"] == event.target
+        if not load_mask.any():
+            raise ValueError(f"Load '{event.target}' not found.")
+        dropout_pct = event.params.get("dropout_pct", 0.80)
+        current_mw = float(net.load.loc[load_mask, "p_mw"].values[0])
+        drop_mw = current_mw * dropout_pct
+        event._snapshot["p_mw"] = net.load.loc[load_mask, "p_mw"].to_dict()
+        net.load.loc[load_mask, "p_mw"] -= drop_mw
+        print(f"[EVENT] AI training dropout: '{event.target}' -{drop_mw:.1f} MW "
+              f"({dropout_pct*100:.0f}% of {current_mw:.1f} MW dropped)")
+
+    # Phase 1 (immediate): compute load spikes. Phase 2: cooling load adds on
+    # after cooling_delay ticks, emulating thermal lag in the data center.
+    def _apply_cooling_cascade(self, event: GridEvent) -> None:
+        net = self.grid.net
+        load_mask = net.load["name"] == event.target
+        if not load_mask.any():
+            raise ValueError(f"Load '{event.target}' not found.")
+        compute_mw = event.params.get("compute_mw", 50.0)
+        event._snapshot["p_mw"] = net.load.loc[load_mask, "p_mw"].to_dict()
+        event._snapshot["cooling_applied"] = False
+        net.load.loc[load_mask, "p_mw"] += compute_mw
+        print(f"[EVENT] Cooling cascade phase 1 (compute): '{event.target}' +{compute_mw:.1f} MW")
+
+    def _update_cooling_cascade(self, event: GridEvent, timestep: float) -> None:
+        if event._snapshot.get("cooling_applied"):
+            return
+        steps_elapsed = timestep - event._applied_at
+        cooling_delay = event.params.get("cooling_delay", 3)
+        if steps_elapsed >= cooling_delay:
+            net = self.grid.net
+            load_mask = net.load["name"] == event.target
+            cooling_mw = event.params.get("cooling_mw", 20.0)
+            net.load.loc[load_mask, "p_mw"] += cooling_mw
+            event._snapshot["cooling_applied"] = True
+            print(f"[EVENT] Cooling cascade phase 2 (thermal): '{event.target}' +{cooling_mw:.1f} MW")
+
+    # Power-electronics loads interact with grid voltage controls, causing the
+    # draw to oscillate sinusoidally rather than hold steady.
+    def _apply_load_oscillation(self, event: GridEvent) -> None:
+        net = self.grid.net
+        load_mask = net.load["name"] == event.target
+        if not load_mask.any():
+            raise ValueError(f"Load '{event.target}' not found.")
+        event._snapshot["p_mw"] = net.load.loc[load_mask, "p_mw"].to_dict()
+        event._snapshot["p_mw_baseline"] = float(net.load.loc[load_mask, "p_mw"].values[0])
+        amplitude = event.params.get("amplitude_mw", 10.0)
+        period    = event.params.get("period_steps", 4.0)
+        print(f"[EVENT] Load oscillation started: '{event.target}' "
+              f"±{amplitude} MW, period={period} ticks")
+
+    def _update_load_oscillation(self, event: GridEvent, timestep: float) -> None:
+        net = self.grid.net
+        load_mask = net.load["name"] == event.target
+        baseline  = event._snapshot["p_mw_baseline"]
+        amplitude = event.params.get("amplitude_mw", 10.0)
+        period    = event.params.get("period_steps", 4.0)
+        steps_elapsed = timestep - event._applied_at
+        offset = amplitude * math.sin(2 * math.pi * steps_elapsed / period)
+        net.load.loc[load_mask, "p_mw"] = baseline + offset
+
+    # ------------------------------------------------------------------
     # Revert handlers — restore saved snapshot
     # ------------------------------------------------------------------
 
@@ -259,6 +368,13 @@ class EventScheduler:
                 self._revert_generator_trip(event)
             elif event.event_type == EventType.LOAD_SPIKE:
                 self._revert_load_spike(event)
+            elif event.event_type in (
+                EventType.AI_TRAINING_SPIKE,
+                EventType.AI_TRAINING_DROPOUT,
+                EventType.COOLING_CASCADE,
+                EventType.LOAD_OSCILLATION,
+            ):
+                self._revert_load_snapshot(event)
         except Exception as exc:
             print(f"[EVENT] Failed to revert {event.name}: {exc}")
 
@@ -283,5 +399,10 @@ class EventScheduler:
             self.grid.net.gen.loc[idx, "in_service"] = val
 
     def _revert_load_spike(self, event: GridEvent) -> None:
+        for idx, val in event._snapshot.get("p_mw", {}).items():
+            self.grid.net.load.loc[idx, "p_mw"] = val
+
+    # Shared revert for all DC events — restores p_mw from snapshot
+    def _revert_load_snapshot(self, event: GridEvent) -> None:
         for idx, val in event._snapshot.get("p_mw", {}).items():
             self.grid.net.load.loc[idx, "p_mw"] = val

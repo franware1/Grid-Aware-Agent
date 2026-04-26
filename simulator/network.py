@@ -9,58 +9,75 @@ Usage:
     grid = GridNetwork()
 """
 
+# ── Variable legend ───────────────────────────────────────────────────────────
+# vn_kv          Nominal voltage in kilovolts (kV)
+# p_mw           Active (real) power in megawatts (MW)
+# q_mvar         Reactive power in megavolt-amperes reactive (MVAR)
+# sn_mva         Rated apparent power in megavolt-amperes (MVA)
+# _r Line resistance per kilometre (Ω/km)
+# _x Line reactance per kilometre (Ω/km)
+# _c Line capacitance per kilometre (nF/km)
+# max_i_ka       Maximum current rating in kiloamperes (kA)
+# vm_pu          Voltage magnitude in per-unit (p.u.)
+# va_degree      Voltage angle in degrees (°)
+# p_min_mw       Minimum generator real power output (MW)
+# p_max_mw       Maximum generator real power output (MW)
+# hv / lv        High-voltage / low-voltage side of a transformer
+# fb / tb        From-bus / to-bus endpoints of a line
+# ──────────────────────────────────────────────────────────────────────────────
+
 import math
 import pandapower as pp
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
  
  
+# Specification for a bus (substation)
 @dataclass
 class BusSpec:
-    """Specification for a bus (substation)."""
     name: str
-    vn_kv: float  # Nominal voltage in kV
+    vn_kv: float
     bus_type: str = "b"  # "b" = PQ bus, "n" = slack bus (reference), "m" = PV bus
     zone: str = "default"
     
     
+# Specification for a transmission/distribution line
 @dataclass
 class LineSpec:
-    """Specification for a transmission/distribution line."""
     name: str
     from_bus: str
     to_bus: str
     length_km: float
-    r_ohm_per_km: float
-    x_ohm_per_km: float
-    c_nf_per_km: float
+    _r: float
+    _x: float
+    _c: float
     sn_mva: float  # Apparent power (thermal capacity)
     
     
+# Specification for a generator (power plant or renewable source)
 @dataclass
 class GeneratorSpec:
-    """Specification for a generator (power plant or renewable source)."""
     name: str
     bus: str
-    p_mw: float  # Real power output (MW)
-    q_mvar: Optional[float] = None  # Reactive power (MVAR)
-    slack: bool = False  # Is this the slack (swing) bus generator?
+    p_mw: float
+    q_mvar: Optional[float] = None
+    slack: bool = False
     p_min_mw: float = 0.0
     p_max_mw: Optional[float] = None
     
     
+# Specification for a static load (city, factory, home)
 @dataclass
 class LoadSpec:
-    """Specification for a static load (city, factory, home)."""
     name: str
     bus: str
-    p_mw: float  # Real power consumption
-    q_mvar: float = 0.0  # Reactive power
+    p_mw: float
+    q_mvar: float = 0.0
     
     
+# Specification for a flexible load (data center, EV charging, etc.)
 @dataclass
 class FlexibleLoadSpec:
-    """Specification for a flexible load (data center, EV charging, etc.)."""
     name: str
     bus: str
     baseline_mw: float  # Baseline demand (constant load)
@@ -70,28 +87,21 @@ class FlexibleLoadSpec:
     defer_window_hours: int = 4  # Time window to defer load (in hours)
     
     
+# Specification for a static generator (renewable DER like solar)
 @dataclass
 class StaticGeneratorSpec:
-    """Specification for a static generator (renewable DER like solar)."""
     name: str
     bus: str
-    p_mw: float  # Current output (set by forecast or scenario)
+    p_mw: float
     q_mvar: float = 0.0
  
  
+# Main grid network class — wraps pandapower with domain abstractions.
+# Stores topology, components (generators/loads/DER), live state, and constraint thresholds.
 class GridNetwork:
-    """
-    Main grid network class. Wraps pandapower network with domain abstractions.
-    
-    Stores:
-        - Topology (buses, lines, transformers)
-        - Components (generators, loads, DER)
-        - State (current P, Q, voltages)
-        - Constraints (thermal limits, voltage bounds, frequency)
-    """
-    
+
+    # Initialize an empty pandapower network
     def __init__(self, name: str = "Default Grid"):
-        """Initialize an empty pandapower network."""
         self.name = name
         self.net = pp.create_empty_network(name=name)
         
@@ -110,11 +120,11 @@ class GridNetwork:
             "voltage_max_pu": 1.05,  # Maximum voltage (per-unit)
             "frequency_nominal_hz": 60.0,
             "frequency_tolerance_hz": 0.2,
-            "reserve_margin_mw": 300.0,  # Minimum spinning reserve
+            "reserve_margin_mw": 350.0,  # Minimum spinning reserve
         }
         
+    # Add a bus (substation) to the network, returns bus index
     def add_bus(self, spec: BusSpec) -> int:
-        """Add a bus (substation) to the network. Returns bus index."""
         bus_idx = pp.create_bus(
             self.net,
             name=spec.name,
@@ -125,8 +135,8 @@ class GridNetwork:
         self.bus_specs[spec.name] = spec
         return bus_idx
     
+    # Add a transmission/distribution line to the network, returns line index
     def add_line(self, spec: LineSpec) -> int:
-        """Add a line (transmission/distribution) to the network. Returns line index."""
         from_idx = self.net.bus[self.net.bus['name'] == spec.from_bus].index[0]
         to_idx = self.net.bus[self.net.bus['name'] == spec.to_bus].index[0]
         
@@ -139,17 +149,17 @@ class GridNetwork:
             from_bus=from_idx,
             to_bus=to_idx,
             length_km=spec.length_km,
-            r_ohm_per_km=spec.r_ohm_per_km,
-            x_ohm_per_km=spec.x_ohm_per_km,
-            c_nf_per_km=spec.c_nf_per_km,
+            r_ohm_per_km=spec._r,
+            x_ohm_per_km=spec._x,
+            c_nf_per_km=spec._c,
             max_i_ka=max_i_ka,
             name=spec.name,
         )
         self.line_specs[spec.name] = spec
         return line_idx
     
+    # Add a generator to the network, returns generator index
     def add_generator(self, spec: GeneratorSpec) -> int:
-        """Add a generator to the network. Returns generator index."""
         bus_idx = self.net.bus[self.net.bus['name'] == spec.bus].index[0]
         
         gen_idx = pp.create_gen(
@@ -165,8 +175,8 @@ class GridNetwork:
         self.gen_specs[spec.name] = spec
         return gen_idx
     
+    # Add a static load to the network, returns load index
     def add_load(self, spec: LoadSpec) -> int:
-        """Add a static load to the network. Returns load index."""
         bus_idx = self.net.bus[self.net.bus['name'] == spec.bus].index[0]
         
         load_idx = pp.create_load(
@@ -179,8 +189,9 @@ class GridNetwork:
         self.load_specs[spec.name] = spec
         return load_idx
     
+    
+    # Add a flexible load (data center) to the network, returns FlexibleLoad object
     def add_flexible_load(self, spec: FlexibleLoadSpec) -> 'FlexibleLoad':
-        """Add a flexible load (data center) to the network. Returns FlexibleLoad object."""
         bus_idx = self.net.bus[self.net.bus['name'] == spec.bus].index[0]
         
         # Create as a regular load, but wrap in FlexibleLoad for tracking
@@ -205,8 +216,9 @@ class GridNetwork:
         self.flex_load_specs[spec.name] = spec
         return flex_load
     
+
+    # Add a static generator (renewable DER) to the network, returns sgen index
     def add_static_gen(self, spec: StaticGeneratorSpec) -> int:
-        """Add a static generator (renewable DER) to the network. Returns sgen index."""
         bus_idx = self.net.bus[self.net.bus['name'] == spec.bus].index[0]
         
         sgen_idx = pp.create_sgen(
@@ -219,13 +231,8 @@ class GridNetwork:
         self.sgen_specs[spec.name] = spec
         return sgen_idx
     
+    # Run AC power flow on the network
     def run_power_flow(self, check_convergence: bool = True) -> bool:
-        """
-        Run AC power flow on the network.
-        
-        Returns:
-            True if power flow converged, False otherwise.
-        """
         try:
             pp.runpp(self.net, check_convergence=check_convergence)
             return True
@@ -233,40 +240,35 @@ class GridNetwork:
             print(f"[WARNING] Power flow did not converge for {self.name}")
             return False
     
+    # Get voltage magnitude (p.u.) and angle (degrees) for a bus
     def get_bus_voltage(self, bus_name: str) -> Tuple[float, float]:
-        """Get voltage magnitude (p.u.) and angle (degrees) for a bus."""
         bus_idx = self.net.bus[self.net.bus['name'] == bus_name].index[0]
         vm_pu = self.net.res_bus.loc[bus_idx, 'vm_pu']
         va_degree = self.net.res_bus.loc[bus_idx, 'va_degree']
         return vm_pu, va_degree
     
+    # Get loading percentage (0-100%) for a line
     def get_line_loading(self, line_name: str) -> float:
-        """Get loading percentage (0-100%) for a line."""
         line_idx = self.net.line[self.net.line['name'] == line_name].index[0]
         loading_pct = self.net.res_line.loc[line_idx, 'loading_percent']
         return loading_pct
     
+    # Get real and reactive power output for a generator
     def get_generator_output(self, gen_name: str) -> Tuple[float, float]:
-        """Get real and reactive power output for a generator."""
         gen_idx = self.net.gen[self.net.gen['name'] == gen_name].index[0]
         p_mw = self.net.res_gen.loc[gen_idx, 'p_mw']
         q_mvar = self.net.res_gen.loc[gen_idx, 'q_mvar']
         return p_mw, q_mvar
     
+    # Get real and reactive power consumption for a load
     def get_load_consumption(self, load_name: str) -> Tuple[float, float]:
-        """Get real and reactive power consumption for a load."""
         load_idx = self.net.load[self.net.load['name'] == load_name].index[0]
         p_mw = self.net.res_load.loc[load_idx, 'p_mw']
         q_mvar = self.net.res_load.loc[load_idx, 'q_mvar']
         return p_mw, q_mvar
     
+    # Check grid state against all constraint thresholds, returns {constraint: is_violated}
     def check_constraints(self) -> Dict[str, bool]:
-        """
-        Check if grid state violates any constraints.
-        
-        Returns:
-            Dictionary of constraint violations {constraint_name: is_violated}
-        """
         violations = {}
         
         # Check line loading
@@ -288,8 +290,13 @@ class GridNetwork:
         
         return violations
     
+    # Get a summary of current grid state
     def get_state_summary(self) -> Dict:
-        """Get a summary of current grid state."""
+        online = self.net.gen["in_service"] == True
+        reserve_mw = (
+            self.net.gen.loc[online, "max_p_mw"].sum()
+            - self.net.res_gen.loc[online, "p_mw"].sum()
+        ) if not self.net.gen.empty else 0.0
         return {
             'name': self.name,
             'n_buses': len(self.net.bus),
@@ -299,6 +306,7 @@ class GridNetwork:
             'total_gen_mw': self.net.res_gen['p_mw'].sum(),
             'total_load_mw': self.net.res_load['p_mw'].sum(),
             'total_sgen_mw': self.net.res_sgen['p_mw'].sum(),
+            'reserve_margin_mw': reserve_mw,
             'max_line_loading_pct': self.net.res_line['loading_percent'].max(),
             'min_bus_voltage_pu': self.net.res_bus['vm_pu'].min(),
             'max_bus_voltage_pu': self.net.res_bus['vm_pu'].max(),
@@ -306,11 +314,8 @@ class GridNetwork:
         }
  
  
+# Flexible load (data center, EV charging, etc.) — can shift, defer, or curtail demand
 class FlexibleLoad:
-    """
-    A flexible load (data center, EV charging station, etc.)
-    Can shift, defer, or curtail its demand within constraints.
-    """
     
     def __init__(
         self,
@@ -336,13 +341,8 @@ class FlexibleLoad:
         self.current_mw = baseline_mw
         self.deferred_mw = 0.0  # Amount currently deferred
         
+    # Set load to a new value within [min_mw, max_mw], returns False if out of bounds
     def set_load(self, p_mw: float) -> bool:
-        """
-        Set load to a new value within constraints.
-        
-        Returns:
-            True if successful, False if out of bounds.
-        """
         if p_mw < self.min_mw or p_mw > self.max_mw:
             print(f"[ERROR] Load {self.name}: {p_mw} MW outside bounds [{self.min_mw}, {self.max_mw}]")
             return False
@@ -351,13 +351,8 @@ class FlexibleLoad:
         self.network.net.load.loc[self.load_idx, 'p_mw'] = p_mw
         return True
     
+    # Defer a portion of load to a future time window, returns False if over the deferrable limit
     def defer_load(self, defer_mw: float) -> bool:
-        """
-        Defer a portion of load (move to future time window).
-        
-        Returns:
-            True if successful, False if exceeds deferrable limit.
-        """
         max_deferrable = self.baseline_mw * self.deferrable_pct
         if defer_mw > max_deferrable:
             print(f"[ERROR] Load {self.name}: Cannot defer {defer_mw} MW (max {max_deferrable} MW)")
@@ -367,27 +362,19 @@ class FlexibleLoad:
         new_load = self.baseline_mw - defer_mw
         return self.set_load(new_load)
     
+    # Curtail load by curtail_pct (0.0-1.0) of baseline, returns False if result is out of bounds
     def curtail_load(self, curtail_pct: float) -> bool:
-        """
-        Curtail (reduce) load by a percentage.
-        
-        Args:
-            curtail_pct: Percentage to curtail (0.0-1.0)
-        
-        Returns:
-            True if successful, False if exceeds bounds.
-        """
         reduction = self.baseline_mw * curtail_pct
         new_load = max(self.baseline_mw - reduction, self.min_mw)
         return self.set_load(new_load)
     
+    # Return load to baseline and clear any deferred amount
     def restore_baseline(self):
-        """Return load to baseline."""
         self.deferred_mw = 0.0
         self.set_load(self.baseline_mw)
     
+    # Get current flexible load state
     def get_state(self) -> Dict:
-        """Get current flexible load state."""
         return {
             'name': self.name,
             'current_mw': self.current_mw,
