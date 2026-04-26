@@ -133,6 +133,17 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
             # Step: power flow + agent
             result = env.step(apply_agent=True)
 
+            # ── Two-brain agent ──────────────────────────────────
+            pf = result.get("pf_report") or {}
+            agent = result.get("agent_result") or {}
+
+            risk = brain1(pf, result)
+            if risk["action_needed"]:
+                b2 = brain2(risk, agent, tick)
+                print(f"\n  [BRAIN2] action     : {b2['action']} → {b2['action_target']}")
+                print(f"  [BRAIN2] threat     : {b2['threat_summary']}")
+                print(f"  [BRAIN2] reasoning  : {b2['reasoning']}")
+                print(f"  [BRAIN2] confidence : {b2['confidence']}\n")
             if not result.get("converged"):
                 print(f"[LIVE] Power flow failed at tick {tick} — stopping.")
                 break
