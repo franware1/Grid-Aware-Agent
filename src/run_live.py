@@ -17,9 +17,11 @@ Usage:
 """
 
 import argparse
+import csv
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))         # src/
@@ -30,8 +32,9 @@ from simulator.brain2 import run as brain2
 from simulator.events import EventScheduler, GridEvent, EventType
 from simulator.build_simulation import SimulationEnvironment
 
-TICKS_PER_HOUR = 6    # 1 tick = 10 minutes
-TICKS_PER_DAY  = 144  # 24 hours × 6 ticks/hour
+MINS_PER_TICK  = 30                      # simulated minutes per tick
+TICKS_PER_HOUR = 60 // MINS_PER_TICK    # = 2
+TICKS_PER_DAY  = 24 * TICKS_PER_HOUR   # = 48
 
 # ── 24-hour hourly load multiplier anchors ─────────────────────────────────────
 # Calibrated for 10-min resolution. 1.0 = baseline (~1,182 MW).
@@ -79,50 +82,126 @@ for _i in range(TICKS_PER_DAY):
 OPERATOR_TIMEOUT_SECONDS = 300  # 5 minutes
 
 
-# ── Demo event schedule ───────────────────────────────────────────────────────
-# Four AI data center events on DC_NoMa spaced across one 24-hour cycle.
-# scheduled_at and duration_steps are in ticks (1 tick = 10 min).
-# cooling_delay and period_steps are left in tick units intentionally:
-#   cooling_delay=3  → 30-minute thermal lag (realistic for CRAC units)
-#   period_steps=4   → 40-minute oscillation cycle (realistic for VFD hunting)
-DEMO_SCHEDULE = [
-    # Tick 36 (06:00 day 1) — morning training job launches with unknown magnitude
-    GridEvent(
-        name="demo_ai_training_spike",
-        event_type=EventType.AI_TRAINING_SPIKE,
-        target="DC_NoMa",
-        scheduled_at=36.0,
-        duration_steps=24,   # 4 hours
-        params={"min_mw": 25.0, "max_mw": 60.0},
-    ),
-    # Tick 84 (14:00 day 1) — training job crashes mid-afternoon, 75% load drops instantly
-    GridEvent(
-        name="demo_ai_training_dropout",
-        event_type=EventType.AI_TRAINING_DROPOUT,
-        target="DC_NoMa",
-        scheduled_at=84.0,
-        duration_steps=18,   # 3 hours
-        params={"dropout_pct": 0.75},
-    ),
-    # Tick 108 (18:00 day 1) — compute surge at evening peak, cooling kicks in 30 min later
-    GridEvent(
-        name="demo_cooling_cascade",
-        event_type=EventType.COOLING_CASCADE,
-        target="DC_NoMa",
-        scheduled_at=108.0,
-        duration_steps=36,   # 6 hours
-        params={"compute_mw": 40.0, "cooling_delay": 3, "cooling_mw": 18.0},
-    ),
-    # Tick 180 (06:00 day 2) — power-electronics hunting during morning ramp
-    GridEvent(
-        name="demo_load_oscillation",
-        event_type=EventType.LOAD_OSCILLATION,
-        target="DC_NoMa",
-        scheduled_at=180.0,
-        duration_steps=48,   # 8 hours
-        params={"amplitude_mw": 15.0, "period_steps": 4.0},
-    ),
+# ── Daily event pattern ───────────────────────────────────────────────────────
+# Four AI data center events fire at the same clock time every day.
+# The repeating pattern lets the agent learn to predict the next day's events.
+#
+#   06:00  AI_TRAINING_SPIKE   — morning job launches, unknown magnitude
+#   14:00  AI_TRAINING_DROPOUT — job crashes mid-afternoon, load drops 75%
+#   18:00  COOLING_CASCADE     — evening compute surge + 30-min thermal lag
+#   21:00  LOAD_OSCILLATION    — power-electronics hunting overnight
+#
+# Tick offsets within a 144-tick day (1 tick = 10 min):
+#   36 = 06:00,  84 = 14:00,  108 = 18:00,  126 = 21:00
+#
+# cooling_delay=3 → 30-min thermal lag  (realistic for CRAC units)
+# period_steps=4  → 40-min oscillation  (realistic for VFD hunting)
+
+_DAILY_PATTERN = [
+    # (day_tick_offset, event_type, base_name, duration_steps, params)
+    # Offsets and durations in ticks (1 tick = 30 min):
+    #   06:00 = tick 12,  14:00 = tick 28,  18:00 = tick 36,  21:00 = tick 42
+    #   cooling_delay=1 → 30-min thermal lag
+    #   period_steps=2  → 60-min oscillation cycle
+    (12, EventType.AI_TRAINING_SPIKE,   "ai_spike",    8,  {"min_mw": 25.0, "max_mw": 60.0}),
+    (28, EventType.AI_TRAINING_DROPOUT, "ai_dropout",  6,  {"dropout_pct": 0.75}),
+    (36, EventType.COOLING_CASCADE,     "cooling",     12, {"compute_mw": 40.0, "cooling_delay": 1, "cooling_mw": 18.0}),
+    (42, EventType.LOAD_OSCILLATION,    "oscillation", 16, {"amplitude_mw": 15.0, "period_steps": 2.0}),
 ]
+
+_N_DAYS = 7   # pre-schedule this many days; extend if longer runs are needed
+
+DEMO_SCHEDULE = [
+    GridEvent(
+        name=f"{name}_d{day + 1}",
+        event_type=ev_type,
+        target="DC_NoMa",
+        scheduled_at=float(day * TICKS_PER_DAY + offset),
+        duration_steps=duration,
+        params=params,
+    )
+    for day in range(_N_DAYS)
+    for offset, ev_type, name, duration, params in _DAILY_PATTERN
+]
+
+
+# ── CSV logging ──────────────────────────────────────────────────────────────
+
+LOG_PATH = Path(__file__).parent.parent / "data" / "live_log.csv"
+
+_LOG_COLUMNS = [
+    # Identity
+    "timestamp_utc", "tick", "sim_time", "day", "day_tick",
+    # Load profile
+    "load_multiplier", "total_load_mw", "total_gen_mw", "total_sgen_mw",
+    # DC_NoMa flexible load
+    "dc_noma_mw",
+    # Grid health
+    "reserve_mw", "max_line_loading_pct", "min_voltage_pu",
+    "n_violations", "converged",
+    # Brain 1
+    "brain1_risk", "action_needed",
+    # Brain 2 (bottleneck warning or event response)
+    "brain2_triggered", "brain2_action", "brain2_target", "brain2_confidence",
+    # Event state
+    "event_fired", "event_name", "event_type",
+    "operator_choice",          # 1-4 / Enter / timeout / "" (no event)
+    "active_events",
+]
+
+
+def _init_log() -> csv.DictWriter:
+    """Open (or create) the CSV log and return a writer positioned at EOF."""
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not LOG_PATH.exists() or LOG_PATH.stat().st_size == 0
+    fh = LOG_PATH.open("a", newline="", encoding="utf-8")
+    writer = csv.DictWriter(fh, fieldnames=_LOG_COLUMNS)
+    if write_header:
+        writer.writeheader()
+        fh.flush()
+    return writer, fh
+
+
+def _log_tick(writer, tick: int, sim_time: str, multiplier: float,
+              state: dict, pf: dict, risk: dict,
+              b2: dict | None, b2_triggered: bool,
+              fired_events: list, operator_choice: str,
+              active_events: list, env) -> None:
+    """Append one row to the live CSV log."""
+    fired = fired_events[0] if fired_events else None
+    dc_mw = float(env.grid.net.load.loc[
+        env.grid.net.load["name"] == "DC_NoMa", "p_mw"
+    ].values[0]) if "DC_NoMa" in env.grid.net.load["name"].values else 0.0
+
+    row = {
+        "timestamp_utc":      datetime.now(timezone.utc).isoformat(),
+        "tick":               tick,
+        "sim_time":           sim_time,
+        "day":                tick // TICKS_PER_DAY + 1,
+        "day_tick":           tick % TICKS_PER_DAY,
+        "load_multiplier":    multiplier,
+        "total_load_mw":      round(state.get("total_load_mw", 0), 2),
+        "total_gen_mw":       round(state.get("total_gen_mw", 0), 2),
+        "total_sgen_mw":      round(state.get("total_sgen_mw", 0), 2),
+        "dc_noma_mw":         round(dc_mw, 2),
+        "reserve_mw":         round(state.get("reserve_margin_mw", 0), 2),
+        "max_line_loading_pct": round(state.get("max_line_loading_pct", 0), 2),
+        "min_voltage_pu":     round(state.get("min_bus_voltage_pu", 0), 4),
+        "n_violations":       pf.get("n_violations", 0),
+        "converged":          int(state.get("converged", False)),
+        "brain1_risk":        round(risk.get("overall_risk", 0), 4),
+        "action_needed":      int(risk.get("action_needed", False)),
+        "brain2_triggered":   int(b2_triggered),
+        "brain2_action":      b2.get("action", "")      if b2 else "",
+        "brain2_target":      b2.get("action_target", "") if b2 else "",
+        "brain2_confidence":  b2.get("confidence", "")  if b2 else "",
+        "event_fired":        int(bool(fired)),
+        "event_name":         fired.name                if fired else "",
+        "event_type":         fired.event_type.value    if fired else "",
+        "operator_choice":    operator_choice,
+        "active_events":      "|".join(e.name for e in active_events),
+    }
+    writer.writerow(row)
 
 
 # ── Operator console helpers ──────────────────────────────────────────────────
@@ -216,14 +295,14 @@ def _print_event_banner(ev: GridEvent, status: str) -> None:
         pairs = "  |  ".join(f"{k}={v}" for k, v in ev.params.items())
         print(f"  Params  : {pairs}")
     if status == "FIRED":
-        print(f"  Duration: {ev.duration_steps} ticks ({ev.duration_steps * 10} min)")
+        print(f"  Duration: {ev.duration_steps} ticks ({ev.duration_steps * MINS_PER_TICK} min)")
     print(f"{bar}\n")
 
 
 def _tick_to_time(tick: int) -> str:
     day_tick = tick % TICKS_PER_DAY
     hour     = day_tick // TICKS_PER_HOUR
-    minute   = (day_tick % TICKS_PER_HOUR) * 10
+    minute   = (day_tick % TICKS_PER_HOUR) * MINS_PER_TICK
     return f"{hour:02d}:{minute:02d}"
 
 
@@ -267,8 +346,9 @@ def print_tick(tick: int, time_str: str, state: dict, agent_result: dict,
         if v.get("reserve_margin"): violations.append("LOW RESERVE")
     alert = f"  ⚠  {', '.join(violations)}" if violations else ""
 
+    day = tick // TICKS_PER_DAY + 1
     print(sep)
-    print(f"  Tick {tick:>5}  |  {time_str}  |  Load ×{multiplier:.4f}")
+    print(f"  Day {day}  |  {time_str}  |  Tick {tick:>5}  |  Load ×{multiplier:.4f}")
     print(f"  Load     : {total_load:>7.1f} MW    Generation : {total_gen:>7.1f} MW")
     print(f"  Reserve  : {reserve:>7.1f} MW    Line max   : {max_line:>6.1f}%")
     print(f"  V min    : {v_min:.4f} p.u.   Agent      : {action_str}{alert}")
@@ -284,6 +364,7 @@ def print_tick(tick: int, time_str: str, state: dict, agent_result: dict,
 def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
     print("\n" + "=" * 70)
     print("  PEPCO DC GRID — LIVE SIMULATION  (10 min/tick)")
+    print(f"  Logging to: {LOG_PATH}")
     print("  Press Ctrl+C to stop")
     print("=" * 70 + "\n")
 
@@ -294,7 +375,9 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
     scheduler = EventScheduler(env.grid)
     for ev in DEMO_SCHEDULE:
         scheduler.schedule(ev)
-    print(f"[LIVE] {len(DEMO_SCHEDULE)} demo events scheduled.\n")
+    print(f"[LIVE] {len(DEMO_SCHEDULE)} demo events scheduled ({_N_DAYS} days × 4 events).\n")
+
+    log_writer, log_fh = _init_log()
 
     tick = 0
     try:
@@ -313,7 +396,6 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
             for ev in event_results["expired"]:
                 _print_event_banner(ev, "CLEARED")
 
-            # Run power flow first so Brain 1/2 see the real post-event grid state
             result = env.step()
             if not result.get("converged"):
                 print(f"[LIVE] Power flow failed at tick {tick} — stopping.")
@@ -323,19 +405,23 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
             agent = result.get("agent_result") or {}
             risk  = brain1(pf, result)
 
+            b2_last       = None
+            b2_triggered  = False
+            operator_choice = ""
+
             # For each newly fired event: print banner, run Brain 2, pause for operator
             for ev in event_results["applied"]:
                 _print_event_banner(ev, "FIRED")
-                b2 = brain2(risk, agent, tick)
-                _operator_console(ev, b2, scheduler)
+                b2_last      = brain2(risk, agent, tick)
+                b2_triggered = True
+                operator_choice = _operator_console(ev, b2_last, scheduler)
 
-            # On non-event ticks where Brain 1 flags risk, show Brain 2 advisory
+            # Bottleneck warning — no immediate action required
             if not event_results["applied"] and risk["action_needed"]:
-                b2 = brain2(risk, agent, tick)
-                print(f"\n  [BRAIN2] action     : {b2['action']} → {b2['action_target']}")
-                print(f"  [BRAIN2] threat     : {b2['threat_summary']}")
-                print(f"  [BRAIN2] reasoning  : {b2['reasoning']}")
-                print(f"  [BRAIN2] confidence : {b2['confidence']}\n")
+                b2_last      = brain2(risk, agent, tick)
+                b2_triggered = True
+                print(f"\n  [BOTTLENECK WARNING]  {b2_last['threat_summary']}")
+                print(f"  Recommended action: {b2_last['action']} → {b2_last['action_target']}  |  confidence: {b2_last['confidence']}\n")
 
             print_tick(
                 tick=tick,
@@ -346,13 +432,32 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
                 active_events=scheduler.active_events(),
             )
 
+            _log_tick(
+                writer=log_writer,
+                tick=tick,
+                sim_time=time_str,
+                multiplier=multiplier,
+                state=result["grid_state"],
+                pf=pf,
+                risk=risk,
+                b2=b2_last,
+                b2_triggered=b2_triggered,
+                fired_events=event_results["applied"],
+                operator_choice=operator_choice,
+                active_events=scheduler.active_events(),
+                env=env,
+            )
+            log_fh.flush()
+
             tick += 1
             time.sleep(tick_seconds)
 
     except KeyboardInterrupt:
-        elapsed_min = tick * 10
+        elapsed_min = tick * MINS_PER_TICK
         print(f"\n\n[LIVE] Stopped by operator after {tick} ticks "
               f"({elapsed_min // 60}h {elapsed_min % 60}m simulated time).")
+    finally:
+        log_fh.close()
 
 
 # ── Dashboard helper ──────────────────────────────────────────────────────────
