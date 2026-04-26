@@ -39,11 +39,19 @@ from agent.agent import GridOptimizationAgent
 
 class SimulationEnvironment:
     """
-    Main simulation environment: orchestrates grid, power flow, and agent.
+    Main simulation environment:
+        Simulates Washington DC grid architecture.
+        Matches the number of
+        - substations
+        - transmission lines
+        - generators
+        - static loads
+        - DER sgens
+        - flex loads
     """
     
+    # Initialize the simulation environment
     def __init__(self, grid_name: str = "Pepco DC — Washington DC"):
-        """Initialize the simulation environment."""
         self.grid_name = grid_name
         self.grid: Optional[GridNetwork] = None
         self.pf_engine: Optional[PowerFlowEngine] = None
@@ -52,6 +60,7 @@ class SimulationEnvironment:
         self.scenario_history: List[Dict] = []
         self.current_time_step = 0
     
+    # Grid simulation config"
     def build_grid(self):
         """
         Build grid uing .
