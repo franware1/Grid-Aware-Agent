@@ -11,6 +11,7 @@ data/live_log.csv after every tick.  Three states are possible:
   OFFLINE — last tick > 360 s ago, or file missing / empty
 """
 
+from __future__ import annotations
 import time
 from datetime import datetime, timezone
 from pathlib import Path
