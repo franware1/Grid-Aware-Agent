@@ -9,6 +9,23 @@ Usage:
     grid = GridNetwork()
 """
 
+# ── Variable legend ───────────────────────────────────────────────────────────
+# vn_kv          Nominal voltage in kilovolts (kV)
+# p_mw           Active (real) power in megawatts (MW)
+# q_mvar         Reactive power in megavolt-amperes reactive (MVAR)
+# sn_mva         Rated apparent power in megavolt-amperes (MVA)
+# _r Line resistance per kilometre (Ω/km)
+# _x Line reactance per kilometre (Ω/km)
+# _c Line capacitance per kilometre (nF/km)
+# max_i_ka       Maximum current rating in kiloamperes (kA)
+# vm_pu          Voltage magnitude in per-unit (p.u.)
+# va_degree      Voltage angle in degrees (°)
+# p_min_mw       Minimum generator real power output (MW)
+# p_max_mw       Maximum generator real power output (MW)
+# hv / lv        High-voltage / low-voltage side of a transformer
+# fb / tb        From-bus / to-bus endpoints of a line
+# ──────────────────────────────────────────────────────────────────────────────
+
 import math
 import pandapower as pp
 from dataclasses import dataclass
@@ -19,7 +36,7 @@ from typing import Dict, List, Optional, Tuple
 class BusSpec:
     """Specification for a bus (substation)."""
     name: str
-    vn_kv: float  # Nominal voltage in kV
+    vn_kv: float
     bus_type: str = "b"  # "b" = PQ bus, "n" = slack bus (reference), "m" = PV bus
     zone: str = "default"
     
@@ -31,9 +48,9 @@ class LineSpec:
     from_bus: str
     to_bus: str
     length_km: float
-    r_ohm_per_km: float
-    x_ohm_per_km: float
-    c_nf_per_km: float
+    _r: float
+    _x: float
+    _c: float
     sn_mva: float  # Apparent power (thermal capacity)
     
     
@@ -42,9 +59,9 @@ class GeneratorSpec:
     """Specification for a generator (power plant or renewable source)."""
     name: str
     bus: str
-    p_mw: float  # Real power output (MW)
-    q_mvar: Optional[float] = None  # Reactive power (MVAR)
-    slack: bool = False  # Is this the slack (swing) bus generator?
+    p_mw: float
+    q_mvar: Optional[float] = None
+    slack: bool = False
     p_min_mw: float = 0.0
     p_max_mw: Optional[float] = None
     
@@ -54,8 +71,8 @@ class LoadSpec:
     """Specification for a static load (city, factory, home)."""
     name: str
     bus: str
-    p_mw: float  # Real power consumption
-    q_mvar: float = 0.0  # Reactive power
+    p_mw: float
+    q_mvar: float = 0.0
     
     
 @dataclass
@@ -75,7 +92,7 @@ class StaticGeneratorSpec:
     """Specification for a static generator (renewable DER like solar)."""
     name: str
     bus: str
-    p_mw: float  # Current output (set by forecast or scenario)
+    p_mw: float
     q_mvar: float = 0.0
  
  
@@ -179,8 +196,9 @@ class GridNetwork:
         self.load_specs[spec.name] = spec
         return load_idx
     
+    
+    """ Add a flexible load (data center) to the network. Returns FlexibleLoad object """
     def add_flexible_load(self, spec: FlexibleLoadSpec) -> 'FlexibleLoad':
-        """Add a flexible load (data center) to the network. Returns FlexibleLoad object."""
         bus_idx = self.net.bus[self.net.bus['name'] == spec.bus].index[0]
         
         # Create as a regular load, but wrap in FlexibleLoad for tracking
@@ -205,8 +223,9 @@ class GridNetwork:
         self.flex_load_specs[spec.name] = spec
         return flex_load
     
+
+    """ Add a static generator (renewable DER) to the network. Returns sgen index. """
     def add_static_gen(self, spec: StaticGeneratorSpec) -> int:
-        """Add a static generator (renewable DER) to the network. Returns sgen index."""
         bus_idx = self.net.bus[self.net.bus['name'] == spec.bus].index[0]
         
         sgen_idx = pp.create_sgen(
@@ -219,13 +238,8 @@ class GridNetwork:
         self.sgen_specs[spec.name] = spec
         return sgen_idx
     
+    """ Run AC power flow on the network """
     def run_power_flow(self, check_convergence: bool = True) -> bool:
-        """
-        Run AC power flow on the network.
-        
-        Returns:
-            True if power flow converged, False otherwise.
-        """
         try:
             pp.runpp(self.net, check_convergence=check_convergence)
             return True

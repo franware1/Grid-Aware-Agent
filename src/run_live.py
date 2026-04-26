@@ -54,7 +54,7 @@ LOAD_PROFILE = [
 def _load_env(grid_id: int):
     """Instantiate the requested grid environment."""
     if grid_id == 1:
-        from simulator.simulation1 import SimulationEnvironment
+        from simulator.build_simulation import SimulationEnvironment
         return SimulationEnvironment()
     elif grid_id == 2:
         from simulator.simulation2 import SimpleGridEnvironment

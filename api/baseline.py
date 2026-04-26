@@ -19,7 +19,7 @@ import pandas as pd
 
 # Allow running as `python src/baseline.py` from the project root
 sys.path.insert(0, str(Path(__file__).parent))
-from fetch_load import fetch_load
+from api.fetch_load import fetch_load
 
 SPIKE_THRESHOLD = 1.08   # flag when actual / baseline > 8%
 ROLLING_WEEKS = 8        # same-hour lookback window

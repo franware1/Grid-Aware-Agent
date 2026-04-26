@@ -1,0 +1,59 @@
+{
+    "grid_name": "Simple Regional Grid",
+    "transmission_substations": [
+        ["TX_North",   "TX"],
+        ["TX_Central", "TX"],
+        ["TX_South",   "TX"]
+    ],
+    "distribution_substations": [
+        ["DIST_01", "DIST"], ["DIST_02", "DIST"], ["DIST_03", "DIST"], ["DIST_04", "DIST"],
+        ["DIST_05", "DIST"], ["DIST_06", "DIST"], ["DIST_07", "DIST"], ["DIST_08", "DIST"],
+        ["DIST_09", "DIST"], ["DIST_10", "DIST"], ["DIST_11", "DIST"], ["DIST_12", "DIST"]
+    ],
+    "line_params": [0.05, 0.35, 9.0, 150.0],
+    "transmission_lines": [
+        ["LINE_North-Central",  "TX_North",   "TX_Central",  8.0],
+        ["LINE_Central-South",  "TX_Central", "TX_South",    7.0],
+        ["LINE_South-North",    "TX_South",   "TX_North",   12.0],
+        ["LINE_North-South_XB", "TX_North",   "TX_South",   10.0]
+    ],
+    "transformers": [
+        ["TX_North",   "DIST_01", 30], ["TX_North",   "DIST_02", 30],
+        ["TX_North",   "DIST_03", 25], ["TX_North",   "DIST_04", 25],
+        ["TX_Central", "DIST_05", 40], ["TX_Central", "DIST_06", 35],
+        ["TX_Central", "DIST_07", 30], ["TX_Central", "DIST_08", 30],
+        ["TX_South",   "DIST_09", 30], ["TX_South",   "DIST_10", 25],
+        ["TX_South",   "DIST_11", 25], ["TX_South",   "DIST_12", 20]
+    ],
+    "generators": [
+        ["Gen_North", "TX_North", 300.0, true,  600.0],
+        ["Gen_South", "TX_South", 200.0, false, 350.0]
+    ],
+    "static_loads": [
+        ["Load_01", "DIST_01", 22.0],
+        ["Load_02", "DIST_02", 18.0],
+        ["Load_03", "DIST_03", 20.0],
+        ["Load_04", "DIST_04", 15.0],
+        ["Load_05", "DIST_05", 30.0],
+        ["Load_06", "DIST_06", 28.0],
+        ["Load_07", "DIST_07", 25.0],
+        ["Load_08", "DIST_08", 22.0],
+        ["Load_09", "DIST_09", 20.0],
+        ["Load_10", "DIST_10", 18.0],
+        ["Load_11", "DIST_11", 16.0],
+        ["Load_12", "DIST_12", 14.0]
+    ],
+    "der_units": [
+        ["DER_Central", "DIST_06", 15.0],
+        ["DER_South",   "DIST_10", 10.0]
+    ],
+    "flexible_load": {
+        "name": "DC_Central",
+        "bus": "DIST_05",
+        "baseline_mw": 30.0,
+        "min_mw": 15.0,
+        "max_mw": 45.0,
+        "deferrable_pct": 0.30,
+        "defer_window_hours": 4
+    }
+}
