@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Live Grid Simulation
 ====================
@@ -20,7 +18,6 @@ Usage:
 
 import argparse
 import csv
-import json
 import sys
 import threading
 import time
@@ -84,6 +81,12 @@ for _i in range(TICKS_PER_DAY):
 # If no input is received, the event persists until its natural duration expires.
 OPERATOR_TIMEOUT_SECONDS = 300  # 5 minutes
 
+# Scale city loads down from the config's 1,182 MW baseline so the simulation
+# starts at ~800 MW total (city + DC) at midnight and peaks around 1,100 MW.
+# The config values reflect the real Pepco topology; this factor brings the
+# demo to a range where a 110 MW data center is a meaningful fraction of load.
+BASE_LOAD_SCALE = 0.72
+
 
 # ── Daily event pattern ───────────────────────────────────────────────────────
 # Four AI data center events fire at the same clock time every day.
@@ -130,8 +133,7 @@ DEMO_SCHEDULE = [
 
 # ── CSV logging ──────────────────────────────────────────────────────────────
 
-LOG_PATH      = Path(__file__).parent.parent / "data" / "live_log.csv"
-RESPONSE_PATH = Path(__file__).parent.parent / "data" / "operator_response.json"
+LOG_PATH = Path(__file__).parent.parent / "data" / "live_log.csv"
 
 _LOG_COLUMNS = [
     # Identity
@@ -209,12 +211,8 @@ def _log_tick(writer, tick: int, sim_time: str, multiplier: float,
 # ── Operator console helpers ──────────────────────────────────────────────────
 
 def _timed_input(prompt: str, timeout: float) -> str:
-    """Read operator choice from stdin OR the dashboard response file, whichever arrives first."""
+    """Read a line from stdin with a wall-clock timeout. Returns '' on timeout."""
     result = [None]
-
-    # Clear any stale frontend response before waiting
-    if RESPONSE_PATH.exists():
-        RESPONSE_PATH.unlink()
 
     def _read():
         try:
@@ -224,22 +222,7 @@ def _timed_input(prompt: str, timeout: float) -> str:
 
     t = threading.Thread(target=_read, daemon=True)
     t.start()
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if result[0] is not None:          # terminal responded
-            return result[0]
-        if RESPONSE_PATH.exists():         # dashboard responded
-            try:
-                data = json.loads(RESPONSE_PATH.read_text())
-                choice = str(data.get("choice", ""))
-                RESPONSE_PATH.unlink(missing_ok=True)
-                print(f"\n  [DASHBOARD] Operator selected: {choice}")
-                return choice
-            except Exception:
-                pass
-        time.sleep(0.25)
-
+    t.join(timeout=timeout)
     return result[0] if result[0] is not None else ""
 
 
@@ -329,16 +312,15 @@ def _tick_to_time(tick: int) -> str:
 
 def apply_load_profile(env: SimulationEnvironment, day_tick: int) -> None:
     # Scale all static loads to the 10-minute slot's demand multiplier.
-    multiplier = LOAD_PROFILE[day_tick]
+    multiplier = LOAD_PROFILE[day_tick] * BASE_LOAD_SCALE
     net = env.grid.net
     for idx in net.load.index:
         name = net.load.loc[idx, "name"]
         # Don't scale the flexible load — events control that directly
         if name == "DC_NoMa":
             continue
-        spec_name = name.replace(" Load", "")
-        if spec_name in env.grid.load_specs:
-            baseline = env.grid.load_specs[spec_name].p_mw
+        if name in env.grid.load_specs:
+            baseline = env.grid.load_specs[name].p_mw
         else:
             baseline = net.load.loc[idx, "p_mw"]
         net.load.loc[idx, "p_mw"] = baseline * multiplier
