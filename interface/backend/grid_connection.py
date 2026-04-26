@@ -19,8 +19,9 @@ from pathlib import Path
 import pandas as pd
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_ROOT         = Path(__file__).parent.parent.parent   # project root
-LIVE_LOG_PATH = _ROOT / "data" / "live_log.csv"
+_ROOT                = Path(__file__).parent.parent.parent   # project root
+LIVE_LOG_PATH        = _ROOT / "data" / "live_log.csv"
+OPERATOR_RESP_PATH   = _ROOT / "data" / "operator_response.json"
 
 # ── Staleness thresholds (seconds since last CSV write) ────────────────────────
 _LIVE_S   = 15    # within 15 s  → LIVE

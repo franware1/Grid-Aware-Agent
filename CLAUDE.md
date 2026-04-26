@@ -10,7 +10,7 @@ Grid-Aware-Agent monitors real electricity load in PJM's Dominion (DOM) zone —
 
 ```bash
 # All scripts require these packages — use uv (system pip is broken on Python 3.13/3.14)
-DEPS="--with requests --with python-dotenv --with pandas --with pandapower --with streamlit"
+DEPS="--with requests --with python-dotenv --with pandas --with pandapower --with streamlit --with anthropic"
 
 # 1. Test API connection
 /opt/homebrew/bin/uv run $DEPS python3 src/fetch_load.py

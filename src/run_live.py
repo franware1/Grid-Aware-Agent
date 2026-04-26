@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Live Grid Simulation
 ====================
@@ -18,6 +20,7 @@ Usage:
 
 import argparse
 import csv
+import json
 import sys
 import threading
 import time
@@ -127,7 +130,8 @@ DEMO_SCHEDULE = [
 
 # ── CSV logging ──────────────────────────────────────────────────────────────
 
-LOG_PATH = Path(__file__).parent.parent / "data" / "live_log.csv"
+LOG_PATH      = Path(__file__).parent.parent / "data" / "live_log.csv"
+RESPONSE_PATH = Path(__file__).parent.parent / "data" / "operator_response.json"
 
 _LOG_COLUMNS = [
     # Identity
@@ -205,8 +209,12 @@ def _log_tick(writer, tick: int, sim_time: str, multiplier: float,
 # ── Operator console helpers ──────────────────────────────────────────────────
 
 def _timed_input(prompt: str, timeout: float) -> str:
-    """Read a line from stdin with a wall-clock timeout. Returns '' on timeout."""
+    """Read operator choice from stdin OR the dashboard response file, whichever arrives first."""
     result = [None]
+
+    # Clear any stale frontend response before waiting
+    if RESPONSE_PATH.exists():
+        RESPONSE_PATH.unlink()
 
     def _read():
         try:
@@ -216,7 +224,22 @@ def _timed_input(prompt: str, timeout: float) -> str:
 
     t = threading.Thread(target=_read, daemon=True)
     t.start()
-    t.join(timeout=timeout)
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if result[0] is not None:          # terminal responded
+            return result[0]
+        if RESPONSE_PATH.exists():         # dashboard responded
+            try:
+                data = json.loads(RESPONSE_PATH.read_text())
+                choice = str(data.get("choice", ""))
+                RESPONSE_PATH.unlink(missing_ok=True)
+                print(f"\n  [DASHBOARD] Operator selected: {choice}")
+                return choice
+            except Exception:
+                pass
+        time.sleep(0.25)
+
     return result[0] if result[0] is not None else ""
 
 
