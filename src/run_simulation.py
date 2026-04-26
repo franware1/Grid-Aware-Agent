@@ -23,7 +23,7 @@ import pandas as pd
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from src.simulation import SimulationEnvironment
+from simulator.simulation1 import SimulationEnvironment
 from simulator.events import EventScheduler, GridEvent, EventType
 
 # The simulator's DC_NoMa FlexibleLoad has baseline_mw=110.
