@@ -202,6 +202,8 @@ def _operator_console(ev: GridEvent, b2: dict, scheduler: EventScheduler) -> str
     return choice
 
 
+
+
 # ── Event / tick display ──────────────────────────────────────────────────────
 
 def _print_event_banner(ev: GridEvent, status: str) -> None:
@@ -327,7 +329,7 @@ def run_live(tick_seconds: float = 1.0, max_ticks: int = None) -> None:
                 b2 = brain2(risk, agent, tick)
                 _operator_console(ev, b2, scheduler)
 
-            # On non-event ticks where Brain 1 flags risk, show Brain 2 advisory only
+            # On non-event ticks where Brain 1 flags risk, show Brain 2 advisory
             if not event_results["applied"] and risk["action_needed"]:
                 b2 = brain2(risk, agent, tick)
                 print(f"\n  [BRAIN2] action     : {b2['action']} → {b2['action_target']}")
