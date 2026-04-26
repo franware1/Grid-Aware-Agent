@@ -22,7 +22,7 @@ VOLT_LOW_WARN  = 0.97   # pu — approaching limit
 VOLT_HIGH_CRIT = 1.05   # pu — NERC upper limit
 VOLT_HIGH_WARN = 1.03   # pu — approaching limit
 
-RESERVE_CRITICAL = 350.0  # MW — matches grid.constraints in network.py
+RESERVE_CRITICAL = 300.0  # MW — matches grid.constraints in network.py
 RESERVE_WARN     = 400.0  # MW
 
 

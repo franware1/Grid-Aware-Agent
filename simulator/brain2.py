@@ -14,7 +14,16 @@ import os
 import json
 import anthropic
 from datetime import datetime
+from pathlib import Path
 
+# Load .env from project root without requiring python-dotenv
+_env_path = Path(__file__).parent.parent / ".env"
+if _env_path.exists():
+    for _line in _env_path.read_text().splitlines():
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip().strip('"').strip("'"))
 
 _client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
@@ -99,56 +108,56 @@ def _build_prompt(risk: dict, context: dict, their_action: dict, time_step: int)
     mkt = context["market"]
 
     return f"""You are a grid operations AI assistant for the Pepco Washington DC distribution grid.
-    Time step: {time_step} | {datetime.now().strftime('%H:%M:%S')}
+Time step: {time_step} | {datetime.now().strftime('%H:%M:%S')}
 
-    ## Risk assessment (Brain 1 output)
-    Overall risk score: {risk['overall_risk']} (0=safe, 1=critical)
-    Top threat: {risk['top_threat']}
-    Action needed: {risk['action_needed']}
+## Risk assessment (Brain 1 output)
+Overall risk score: {risk['overall_risk']} (0=safe, 1=critical)
+Top threat: {risk['top_threat']}
+Action needed: {risk['action_needed']}
 
-    ## Grid state
-    Top loaded lines:
-    {lines_str}
+## Grid state
+Top loaded lines:
+{lines_str}
 
-    System:
-    Reserve margin: {sys.get('reserve_mw', 'N/A')} MW (score: {sys.get('reserve_score', 'N/A')})
-    Voltage range: {sys.get('voltage_min_pu', 'N/A')}–{sys.get('voltage_max_pu', 'N/A')} pu (score: {sys.get('voltage_score', 'N/A')})
+System:
+  Reserve margin: {sys.get('reserve_mw', 'N/A')} MW (score: {sys.get('reserve_score', 'N/A')})
+  Voltage range: {sys.get('voltage_min_pu', 'N/A')}–{sys.get('voltage_max_pu', 'N/A')} pu (score: {sys.get('voltage_score', 'N/A')})
 
-    Constraint violations:
-    {violations_str}
+Constraint violations:
+{violations_str}
 
-    ## DC_NoMa flexible load (the lever we can pull)
-    Current draw:   {dc.get('current_mw', 'N/A')} MW
-    Baseline:       {dc.get('baseline_mw', 'N/A')} MW
-    Max deferrable: {dc.get('deferrable_mw', 'N/A')} MW (25% of baseline)
+## DC_NoMa flexible load (the lever we can pull)
+  Current draw:   {dc.get('current_mw', 'N/A')} MW
+  Baseline:       {dc.get('baseline_mw', 'N/A')} MW
+  Max deferrable: {dc.get('deferrable_mw', 'N/A')} MW (25% of baseline)
 
-    ## What the rule-based agent already did this step
-    {their_actions_str}
+## What the rule-based agent already did this step
+{their_actions_str}
 
-    ## External context
-    Regional demand: {eia['current_mw']:,} MW (PJM DOM), trend: {eia['trend']}
-    Forecast +1h: {eia['forecast_1h_mw']:,} MW
-    LMP: ${mkt['lmp_per_mwh']}/MWh {'[CONGESTED]' if mkt['congested'] else ''}
-    Weather: {wx['temp_c']}°C, cooling pressure: {wx['cooling_pressure']}
+## External context
+Regional demand: {eia['current_mw']:,} MW (PJM DOM), trend: {eia['trend']}
+Forecast +1h: {eia['forecast_1h_mw']:,} MW
+LMP: ${mkt['lmp_per_mwh']}/MWh {'[CONGESTED]' if mkt['congested'] else ''}
+Weather: {wx['temp_c']}°C, cooling pressure: {wx['cooling_pressure']}
 
-    ## Your task
-    The rule-based agent reacts to violations that already exist.
-    Your job is to reason one step ahead — catch what it misses and explain why.
+## Your task
+The rule-based agent reacts to violations that already exist.
+Your job is to reason one step ahead — catch what it misses and explain why.
 
-    1. Identify the real threat in 1-2 sentences an operator can act on.
-    2. Choose exactly ONE action: {" | ".join(sorted(VALID_ACTIONS))}
-    3. Name the target: DC_NoMa, a specific line name, or "operator".
-    4. Confidence: low | medium | high
-    5. Reasoning: 2-3 sentences. Mention what the rule-based agent did and whether it's sufficient.
+1. Identify the real threat in 1-2 sentences an operator can act on.
+2. Choose exactly ONE action: {" | ".join(sorted(VALID_ACTIONS))}
+3. Name the target: DC_NoMa, a specific line name, or "operator".
+4. Confidence: low | medium | high
+5. Reasoning: 2-3 sentences. Mention what the rule-based agent did and whether it's sufficient.
 
-    Respond ONLY in valid JSON, no markdown:
-    {{
-    "threat_summary": "...",
-    "action": "...",
-    "action_target": "...",
-    "confidence": "...",
-    "reasoning": "..."
-    }}"""
+Respond ONLY in valid JSON, no markdown:
+{{
+  "threat_summary": "...",
+  "action": "...",
+  "action_target": "...",
+  "confidence": "...",
+  "reasoning": "..."
+}}"""
 
 
 # ── Main entry point ──────────────────────────────────────────────────────────
@@ -175,7 +184,7 @@ def run(risk: dict, their_action: dict, time_step: int) -> dict:
 
     try:
         response = _client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )

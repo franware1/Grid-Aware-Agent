@@ -8,3 +8,5 @@ venv/
 data/raw/
 *.csv
 *.parquet
+.env
+.env
