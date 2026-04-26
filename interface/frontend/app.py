@@ -8,7 +8,6 @@ Run:
 
 import base64
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -125,6 +124,7 @@ if "running" not in st.session_state:
 conn   = get_connection_status()
 hist   = get_history(n=288)
 latest = get_latest_state()
+_current_tick = int(latest.get("tick", -1)) if latest else -1
 
 now_str = datetime.now().strftime("%H:%M:%S")
 
@@ -185,6 +185,20 @@ def sbar(val, label, plain):
             f'<div style="font-family:Share Tech Mono;font-size:16px;color:{col};min-width:38px;text-align:right">{val:.2f}</div></div>'
             f'<div class="risk-bar-wrap" style="margin:0"><div class="risk-bar" style="width:{val*100:.1f}%;background:{col}"></div></div></div>')
 
+@st.fragment(run_every=1)
+def _refresh_poller(current_tick: int):
+    """Polls every second at a fixed script position regardless of OFFLINE/ONLINE state.
+    Triggers a full-page rerun only when the tick advances."""
+    if not st.session_state.running:
+        return
+    _s = get_latest_state()
+    _t = int(_s.get("tick", -1)) if _s else -1
+    if _t != current_tick:
+        st.rerun()
+
+# Single call — always at the same script position so Streamlit tracks the fragment consistently
+_refresh_poller(_current_tick)
+
 # ══════════════════════════════════════════════════════════════════════════════
 # OFFLINE SCREEN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -235,10 +249,6 @@ if conn["status"] == "OFFLINE" or latest is None:
         if st.button("⏸ PAUSE" if st.session_state.running else "▶ RUN"):
             st.session_state.running = not st.session_state.running
             st.rerun()
-
-    if st.session_state.running:
-        time.sleep(1.0)
-        st.rerun()
 
     st.stop()
 
@@ -726,15 +736,3 @@ with tab_events:
             rt_inner = '<div style="font-family:Share Tech Mono;font-size:10px;color:#2a5a2a;padding:20px 0;text-align:center">RUNNING — NO EVENTS FIRED YET</div>'
         st.markdown(f'<div class="scada-card"><div class="log-scroll" style="height:420px">{rt_inner}</div></div>', unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# AUTO-REFRESH — poll until a new tick is written, then rerun
-# ══════════════════════════════════════════════════════════════════════════════
-if st.session_state.running:
-    _deadline = time.time() + 10.0  # fall-through after 10 s to refresh status
-    while time.time() < _deadline:
-        time.sleep(0.5)
-        _new = get_latest_state()
-        _new_tick = int(_new.get("tick", -1)) if _new else -1
-        if _new_tick != tick:
-            break
-    st.rerun()

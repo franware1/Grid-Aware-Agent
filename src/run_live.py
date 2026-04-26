@@ -81,6 +81,12 @@ for _i in range(TICKS_PER_DAY):
 # If no input is received, the event persists until its natural duration expires.
 OPERATOR_TIMEOUT_SECONDS = 300  # 5 minutes
 
+# Scale city loads down from the config's 1,182 MW baseline so the simulation
+# starts at ~800 MW total (city + DC) at midnight and peaks around 1,100 MW.
+# The config values reflect the real Pepco topology; this factor brings the
+# demo to a range where a 110 MW data center is a meaningful fraction of load.
+BASE_LOAD_SCALE = 0.72
+
 
 # ── Daily event pattern ───────────────────────────────────────────────────────
 # Four AI data center events fire at the same clock time every day.
@@ -306,16 +312,15 @@ def _tick_to_time(tick: int) -> str:
 
 def apply_load_profile(env: SimulationEnvironment, day_tick: int) -> None:
     # Scale all static loads to the 10-minute slot's demand multiplier.
-    multiplier = LOAD_PROFILE[day_tick]
+    multiplier = LOAD_PROFILE[day_tick] * BASE_LOAD_SCALE
     net = env.grid.net
     for idx in net.load.index:
         name = net.load.loc[idx, "name"]
         # Don't scale the flexible load — events control that directly
         if name == "DC_NoMa":
             continue
-        spec_name = name.replace(" Load", "")
-        if spec_name in env.grid.load_specs:
-            baseline = env.grid.load_specs[spec_name].p_mw
+        if name in env.grid.load_specs:
+            baseline = env.grid.load_specs[name].p_mw
         else:
             baseline = net.load.loc[idx, "p_mw"]
         net.load.loc[idx, "p_mw"] = baseline * multiplier
