@@ -21,7 +21,8 @@ from enum import Enum
 from typing import TYPE_CHECKING, Dict, List, Optional, Any
 
 if TYPE_CHECKING:
-    from simulator.network import GridNetwork
+    from simulation import SimulationEnvironment
+    from simulator.events import EventScheduler, GridEvent, EventType
 
 
 class EventType(str, Enum):
