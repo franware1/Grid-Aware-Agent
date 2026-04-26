@@ -21,6 +21,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
+from simulator.brain1 import score as brain1
+from simulator.brain2 import run as brain2
 from src.simulation import SimulationEnvironment
 
 # ── 24-hour load multiplier profile ───────────────────────────────────────────
