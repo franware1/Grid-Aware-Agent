@@ -129,6 +129,17 @@ class EventScheduler:
     def event_history(self) -> List[GridEvent]:
         return list(self._history)
 
+    def force_resolve(self, event_name: str) -> bool:
+        """Operator-approved early resolution: revert and retire a named active event."""
+        for event in self._active:
+            if event.name == event_name:
+                self._revert(event)
+                self._active.remove(event)
+                self._history.append(event)
+                print(f"[EVENT] Resolved | {event.event_type.value:20s} | target={event.target} | operator-approved")
+                return True
+        return False
+
     # ------------------------------------------------------------------
     # Internal — apply / expire
     # ------------------------------------------------------------------

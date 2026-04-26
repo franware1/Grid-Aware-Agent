@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from typing import Dict, List, Optional, Tuple
 
-_CONFIG_PATH = Path(__file__).parent / "grid_config.json"
+_CONFIG_PATH = Path(__file__).parent / "config" / "grid_config.json"
 with open(_CONFIG_PATH) as _f:
     _CFG = json.load(_f)
 

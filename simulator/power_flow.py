@@ -132,22 +132,17 @@ class PowerFlowEngine:
             ))
         
         # --- Check reserve margin (spinning reserve) ---
+        # Headroom = Σ(max_p_mw − actual_p_mw) across online generators.
+        # gen+sgen−load ≈ losses only (slack balances exactly), so that formula
+        # produces ~4 MW regardless of grid stress — use capacity headroom instead.
         if not self.net.gen.empty:
-            total_gen = self.net.res_gen['p_mw'].sum()
+            online = self.net.gen["in_service"] == True
+            reserve = (
+                self.net.gen.loc[online, "max_p_mw"].sum()
+                - self.net.res_gen.loc[online, "p_mw"].sum()
+            )
         else:
-            total_gen = 0.0
-        
-        if not self.net.load.empty:
-            total_load = self.net.res_load['p_mw'].sum()
-        else:
-            total_load = 0.0
-        
-        if not self.net.sgen.empty:
-            total_sgen = self.net.res_sgen['p_mw'].sum()
-        else:
-            total_sgen = 0.0
-        
-        reserve = total_gen + total_sgen - total_load
+            reserve = 0.0
         min_reserve = self.grid.constraints['reserve_margin_mw']
         
         violations_dict['reserve_margin'] = reserve < min_reserve
@@ -261,7 +256,14 @@ class PowerFlowEngine:
         total_gen = self.net.res_gen['p_mw'].sum() if not self.net.gen.empty else 0.0
         total_load = self.net.res_load['p_mw'].sum() if not self.net.load.empty else 0.0
         total_sgen = self.net.res_sgen['p_mw'].sum() if not self.net.sgen.empty else 0.0
-        reserve = total_gen + total_sgen - total_load
+        if not self.net.gen.empty:
+            online = self.net.gen["in_service"] == True
+            reserve = (
+                self.net.gen.loc[online, "max_p_mw"].sum()
+                - self.net.res_gen.loc[online, "p_mw"].sum()
+            )
+        else:
+            reserve = 0.0
         
         summary = {
             'status': 'converged',
