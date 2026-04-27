@@ -1,6 +1,6 @@
-# Grid-Aware Agent
+# Kashimo
 
-An AI-powered energy management system that simulates the Washington DC power grid (modeled on Pepco's actual topology) and responds to demand disruptions caused by AI data centers. A rule-based risk scorer (Brain 1) monitors the grid every tick; when risk crosses a threshold, a Claude-powered reasoning agent (Brain 2) recommends an action to a human operator.
+Kashimo is an AI-powered energy management system that simulates the Washington DC power grid (modeled on Pepco's actual topology) and responds to demand disruptions caused by AI data centers. A rule-based risk scorer (Brain 1) monitors the grid every tick; when risk crosses a threshold, a Claude-powered reasoning agent (Brain 2) recommends an action to a human operator.
 
 ---
 
